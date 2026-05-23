@@ -1,8 +1,10 @@
-data/raw/
-data/processed/
 __pycache__/
 .ipynb_checkpoints/
 .DS_Store
 venv/
-*.gpkg
 cache/
+notebooks/cache/
+src/__pycache__/
+*.tif
+data/raw/worldpop/
+data/processed/*.tif
