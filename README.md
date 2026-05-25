@@ -112,7 +112,11 @@
    `data/processed/grid_*_1km_features.gpkg` (колонки `population`, `dist_*`).
 2. Выполнить `01_decay.ipynb` целиком. Раздел 1 тянет города из Overpass (кэш
    `cities_*.csv`); раздел про v1-net скачивает графы дорог в `graphs/*.graphml`
-   (медленно через Overpass, потом из кэша). Регионы без графа пропускаются.
+   (медленно через Overpass, потом из кэша). Запросы к Overpass щадящие
+   (`configure_osmnx`): ожидание свободного слота, упрощённый полигон границы
+   (~250 вершин вместо тысяч), кэш сырых ответов в `cache/osmnx`; полный
+   drive-граф со всеми улицами не качается — только магистрали. Регионы без
+   графа пропускаются.
 3. Результаты: `results/decay_metrics.csv`, `results/decay_kernels.csv`,
    `results/decay_net_metrics.csv`, карты `results/decay_*.png`,
    сетки `results/decay_grids/`.

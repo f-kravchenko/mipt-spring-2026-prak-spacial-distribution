@@ -1,6 +1,7 @@
 from .spatial_decay import (
     cities_gdf,
     city_mass,
+    configure_osmnx,
     decay_kernel,
     distribute_decay,
     distribute_decay_network,
@@ -33,6 +34,7 @@ __all__ = [
     "tune_gravity",
     "tune_on_matrix",
     "tune_sigma",
+    "configure_osmnx",
     "region_polygon",
     "load_road_graph",
     "network_minutes",

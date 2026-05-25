@@ -31,7 +31,8 @@ import numpy as np
 from shapely.geometry import Point
 
 # Папка с кэшем городов (cities_<region>.csv). Рассчитывается относительно пакета.
-_DATA = Path(__file__).resolve().parents[1] / "data" / "processed"
+_ROOT = Path(__file__).resolve().parents[1]
+_DATA = _ROOT / "data" / "processed"
 
 # Минимальный встроенный список (fallback, если нет cities_<region>.csv).
 # Имя -> (lon, lat, население). Первый город — «центр» региона.
@@ -281,8 +282,32 @@ def tune_sigma(grid, region_key: str, kind: str, sigmas, buffer_km=DEFAULT_BUFFE
 # ----------------------------------------------------------------------------
 
 
-def region_polygon(region_key: str):
-    """Граница региона (EPSG:4326) с заполненными дырками — для скачивания графа."""
+def configure_osmnx():
+    """
+    Вежливые настройки osmnx, снижающие риск бана Overpass и лишних запросов:
+    - стабильный абсолютный HTTP-кэш (иначе ./cache зависит от CWD и не
+      переиспользуется между ноутбуком и скриптами → повторные загрузки);
+    - ожидание свободного слота сервера (overpass_rate_limit);
+    - щадящий таймаут и понятный User-Agent.
+    Сам полный drive-граф (все улицы) мы НИКОГДА не качаем — только магистрали.
+    """
+    import osmnx as ox
+
+    cache = _ROOT / "cache" / "osmnx"  # под игнорируемым cache/
+    cache.mkdir(parents=True, exist_ok=True)
+    ox.settings.use_cache = True
+    ox.settings.cache_folder = str(cache)
+    ox.settings.overpass_rate_limit = True
+    ox.settings.requests_timeout = 300
+    ox.settings.http_user_agent = "mipt-prak-spatial/1.0 (student project)"
+
+
+def region_polygon(region_key: str, simplify_tol_deg: float = 0.01):
+    """
+    Граница региона (EPSG:4326) с заполненными дырками — для скачивания графа.
+    Полигон упрощается (по умолчанию ~1 км): к Overpass уходит короткий `poly:`-
+    фильтр вместо тысяч вершин границы — запрос меньше и парсится быстрее.
+    """
     import geopandas as gpd
     from shapely.geometry import MultiPolygon, Polygon
     from shapely.ops import unary_union
@@ -290,15 +315,20 @@ def region_polygon(region_key: str):
     b = gpd.read_file(_DATA / _BORDERS[region_key]).to_crs(4326)
     geom = unary_union(b.geometry.values)
     if isinstance(geom, Polygon):
-        return Polygon(geom.exterior)
-    return MultiPolygon([Polygon(g.exterior) for g in geom.geoms])
+        geom = Polygon(geom.exterior)
+    else:
+        geom = MultiPolygon([Polygon(g.exterior) for g in geom.geoms])
+    if simplify_tol_deg:
+        geom = geom.simplify(simplify_tol_deg)
+    return geom
 
 
-def load_road_graph(region_key: str, force: bool = False):
+def load_road_graph(region_key: str, force: bool = False, custom_filter: str = ROAD_FILTER):
     """
     Граф магистральных дорог региона с временем в пути на рёбрах (travel_time, сек).
     Кэшируется в `data/processed/graphs/roads_<region>.graphml`.
-    Скачивание идёт через Overpass (медленно), повторный вызов читает кэш.
+    Скачивание идёт через Overpass (медленно), повторный вызов читает кэш;
+    к тому же osmnx кэширует и сырой ответ Overpass (см. `configure_osmnx`).
     """
     import osmnx as ox
 
@@ -307,8 +337,9 @@ def load_road_graph(region_key: str, force: bool = False):
     if path.exists() and not force:
         return ox.io.load_graphml(path)
 
+    configure_osmnx()
     G = ox.graph_from_polygon(
-        region_polygon(region_key), custom_filter=ROAD_FILTER, simplify=True, retain_all=False
+        region_polygon(region_key), custom_filter=custom_filter, simplify=True, retain_all=False
     )
     G = ox.routing.add_edge_speeds(G)
     G = ox.routing.add_edge_travel_times(G)
