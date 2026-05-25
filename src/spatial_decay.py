@@ -2,30 +2,39 @@
 v1 — метод затухания (gravity / distance-decay) для разнесения регионального
 показателя Росстата по ячейкам сетки.
 
-Идея: вес ячейки i — это потенциал доступности к городам,
-    w_i = sum_j  pop_j * f(d_ij),
-где d_ij — расстояние от центроида ячейки до города j (км), pop_j — население
-города, f — ядро затухания. Затем X_region разносится пропорционально весам.
+Идея: вес ячейки i — потенциал доступности к городам,
+    w_i = sum_j  m_j * f(d_ij),
+где d_ij — расстояние от центроида ячейки до города j (км), f — ядро затухания,
+m_j — «масса» города. Масса = (pop_j / max_pop)^beta — нормированное население в
+степени beta (гравитационная эластичность). Затем X_region разносится
+пропорционально весам.
 
-Это обобщает прежний baseline-вариант `1/(d+1)`:
-- учитывается население городов (Москва и пригород вносят разный вклад),
-- сравниваются три формы ядра (exp / gauss / power),
-- параметр ядра подбирается по корреляции веса с растром населения (WorldPop).
+Что улучшено по сравнению с наивным `1/(d+1)`:
+- города берутся из OSM (city/town с населением), а не 6-9 точек вручную;
+- города фильтруются по близости к региону (out-of-region агломерации не тянут
+  отгрузку в чужие углы), см. `buffer_km`;
+- масса города нелинейна по населению: `pop^beta` (beta=1 — линейно, beta>1 —
+  концентрация в крупных городах, ср. эластичность регрессии v3 ≈ 2.77);
+- сравниваются три ядра (exp / gauss / power), параметры (sigma, beta)
+  подбираются по корреляции веса с растром населения WorldPop.
 
-Поддерживаемые ядра (см. `decay_kernel`):
-- "exp"   : exp(-d / sigma)            — sigma в км, масштаб затухания
-- "gauss" : exp(-d^2 / (2 sigma^2))    — sigma в км
-- "power" : 1 / (d + 1)^sigma          — sigma безразмерный показатель степени
+Источник городов: `data/processed/cities_<region>.csv` (готовится Overpass-
+запросом, см. ноутбук). При отсутствии файла используется встроенный список
+`CITIES` (минимальный fallback).
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 from shapely.geometry import Point
 
-# Города пилотных регионов: имя -> (lon, lat, население).
-# Население — округлённые оценки Росстата (перепись 2021 / текущие оценки).
-# Первый город в каждом списке считается "центром" региона.
+# Папка с кэшем городов (cities_<region>.csv). Рассчитывается относительно пакета.
+_DATA = Path(__file__).resolve().parents[1] / "data" / "processed"
+
+# Минимальный встроенный список (fallback, если нет cities_<region>.csv).
+# Имя -> (lon, lat, население). Первый город — «центр» региона.
 CITIES: dict[str, dict[str, tuple[float, float, int]]] = {
     "moscow": {
         "Москва": (37.6173, 55.7558, 12655050),
@@ -68,27 +77,69 @@ X_SHIPPING: dict[str, float] = {
 
 KERNELS = ("exp", "gauss", "power")
 
+# Степень массы по умолчанию: эластичность по городскому населению из регрессии v3.
+DEFAULT_BETA = 2.77
+# Радиус, в пределах которого город считается влияющим на регион (км).
+# 30 км перекрывает «дырку» Москвы (федеральный город в 25 км от ячеек области),
+# но отсекает города соседних регионов (ближайший — Рязань, 47 км).
+DEFAULT_BUFFER_KM = 30.0
 
-def cities_gdf(region_key: str, crs="EPSG:3857"):
-    """GeoDataFrame городов региона с колонками city, population (в нужной CRS)."""
-    import geopandas as gpd
+
+def load_cities(region_key: str):
+    """
+    Список городов региона как DataFrame с колонками name, lon, lat, population.
+    Читает кэш `data/processed/cities_<region>.csv`; при отсутствии — fallback
+    на встроенный CITIES. Города без населения отбрасываются (нужны для массы).
+    """
+    import pandas as pd
+
+    path = _DATA / f"cities_{region_key}.csv"
+    if path.exists():
+        df = pd.read_csv(path)
+        df = df.dropna(subset=["population"]).copy()
+        df["population"] = df["population"].astype(float)
+        return df[["name", "lon", "lat", "population"]].reset_index(drop=True)
 
     rows = CITIES[region_key]
-    gdf = gpd.GeoDataFrame(
+    return pd.DataFrame(
         {
-            "city": list(rows.keys()),
-            "population": [v[2] for v in rows.values()],
-        },
-        geometry=[Point(v[0], v[1]) for v in rows.values()],
-        crs="EPSG:4326",
+            "name": list(rows.keys()),
+            "lon": [v[0] for v in rows.values()],
+            "lat": [v[1] for v in rows.values()],
+            "population": [float(v[2]) for v in rows.values()],
+        }
     )
-    return gdf.to_crs(crs)
+
+
+def cities_gdf(region_key: str, crs="EPSG:3857", grid=None, buffer_km: float | None = None):
+    """
+    GeoDataFrame городов региона (city, population, geometry) в нужной CRS.
+
+    Если передан `grid` и `buffer_km`, оставляем только города, чья дистанция до
+    ближайшего центроида ячейки <= buffer_km. Так центр-в-дырке (напр. Москва)
+    сохраняется (расстояние ~0), а города соседних регионов в углах bbox
+    отбрасываются.
+    """
+    import geopandas as gpd
+
+    df = load_cities(region_key)
+    gdf = gpd.GeoDataFrame(
+        {"city": df["name"].to_numpy(), "population": df["population"].to_numpy()},
+        geometry=[Point(lon, lat) for lon, lat in zip(df["lon"], df["lat"])],
+        crs="EPSG:4326",
+    ).to_crs(crs)
+
+    if grid is not None and buffer_km is not None:
+        dmat = city_distances_km(grid, gdf)
+        near = dmat.min(axis=0) <= buffer_km
+        gdf = gdf[near].reset_index(drop=True)
+    return gdf
 
 
 def city_distances_km(grid, cities) -> np.ndarray:
     """
     Матрица расстояний (n_cells, n_cities) в км между центроидами ячеек и
-    городами. Обе геометрии должны быть в одной проекционной CRS (метры).
+    городами. Обе геометрии — в одной проекционной CRS (метры).
     """
     cents = grid.geometry.centroid
     cx = cents.x.to_numpy()
@@ -112,20 +163,28 @@ def decay_kernel(d_km: np.ndarray, sigma: float, kind: str = "exp") -> np.ndarra
     raise ValueError(f"неизвестное ядро: {kind!r}, ожидалось одно из {KERNELS}")
 
 
+def city_mass(populations: np.ndarray, beta: float = 1.0) -> np.ndarray:
+    """Масса города: (pop / max_pop)^beta. Нормировка убирает переполнение."""
+    pop = np.asarray(populations, dtype=float)
+    pmax = pop.max() if len(pop) and pop.max() > 0 else 1.0
+    return np.power(pop / pmax, beta)
+
+
 def gravity_weights(
     dist_km: np.ndarray,
     populations: np.ndarray,
     sigma: float,
     kind: str = "exp",
+    beta: float = 1.0,
     use_population: bool = True,
 ) -> np.ndarray:
     """
-    Потенциал доступности ячеек: w_i = sum_j pop_j * f(d_ij).
-    При use_population=False население городов игнорируется (w_i = sum_j f(d_ij)).
+    Потенциал доступности ячеек: w_i = sum_j m_j * f(d_ij),
+    где m_j = (pop_j/max_pop)^beta (или 1, если use_population=False).
     """
     f = decay_kernel(dist_km, sigma, kind)
     if use_population:
-        return f @ np.asarray(populations, dtype=float)
+        return f @ city_mass(populations, beta)
     return f.sum(axis=1)
 
 
@@ -135,13 +194,15 @@ def distribute_decay(
     region_key: str,
     sigma: float,
     kind: str = "exp",
+    beta: float = 1.0,
+    buffer_km: float | None = DEFAULT_BUFFER_KM,
     use_population: bool = True,
 ) -> np.ndarray:
     """Разнести X_region по ячейкам сетки методом затухания (v1)."""
-    cities = cities_gdf(region_key, grid.crs)
+    cities = cities_gdf(region_key, grid.crs, grid=grid, buffer_km=buffer_km)
     dist = city_distances_km(grid, cities)
     w = gravity_weights(
-        dist, cities["population"].to_numpy(), sigma, kind, use_population
+        dist, cities["population"].to_numpy(), sigma, kind, beta, use_population
     )
     total = w.sum()
     if not np.isfinite(total) or total <= 0:
@@ -150,37 +211,47 @@ def distribute_decay(
     return X_region * w / total
 
 
-def tune_sigma(
+def tune_gravity(
     grid,
     region_key: str,
     kind: str,
     sigmas,
-    use_population: bool = True,
-) -> tuple[tuple[float, float], list[tuple[float, float]]]:
+    betas=(1.0,),
+    buffer_km: float | None = DEFAULT_BUFFER_KM,
+):
     """
-    Подобрать sigma, максимизируя ранговую корреляцию (Spearman) веса затухания
-    с растром населения WorldPop (`grid['population']`) как прокси истины.
+    Подобрать (sigma, beta) для ядра `kind`, максимизируя ранговую корреляцию
+    (Spearman) веса затухания с растром населения WorldPop (`grid['population']`).
 
-    Возвращает ((best_sigma, best_rho), [(sigma, rho), ...]).
+    Матрица расстояний считается один раз. Возвращает
+    ((best_sigma, best_beta, best_rho), [(sigma, beta, rho), ...]).
     """
     from scipy.stats import spearmanr
 
-    cities = cities_gdf(region_key, grid.crs)
+    cities = cities_gdf(region_key, grid.crs, grid=grid, buffer_km=buffer_km)
     dist = city_distances_km(grid, cities)
     pops = cities["population"].to_numpy()
     target = grid["population"].to_numpy().astype(float)
 
-    results: list[tuple[float, float]] = []
-    best: tuple[float, float] | None = None
-    for s in sigmas:
-        w = gravity_weights(dist, pops, s, kind, use_population)
-        rho = spearmanr(w, target).correlation
-        rho = 0.0 if not np.isfinite(rho) else float(rho)
-        results.append((float(s), rho))
-        if best is None or rho > best[1]:
-            best = (float(s), rho)
+    results: list[tuple[float, float, float]] = []
+    best: tuple[float, float, float] | None = None
+    for beta in betas:
+        mass = city_mass(pops, beta)
+        for s in sigmas:
+            w = decay_kernel(dist, s, kind) @ mass
+            rho = spearmanr(w, target).correlation
+            rho = 0.0 if not np.isfinite(rho) else float(rho)
+            results.append((float(s), float(beta), rho))
+            if best is None or rho > best[2]:
+                best = (float(s), float(beta), rho)
     assert best is not None
     return best, results
+
+
+def tune_sigma(grid, region_key: str, kind: str, sigmas, buffer_km=DEFAULT_BUFFER_KM):
+    """Частный случай tune_gravity при beta=1 (обратная совместимость)."""
+    (s, _b, rho), res = tune_gravity(grid, region_key, kind, sigmas, betas=(1.0,), buffer_km=buffer_km)
+    return (s, rho), [(sig, r) for sig, _bb, r in res]
 
 
 def gini(values) -> float:
