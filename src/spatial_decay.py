@@ -84,6 +84,21 @@ DEFAULT_BETA = 2.77
 # но отсекает города соседних регионов (ближайший — Рязань, 47 км).
 DEFAULT_BUFFER_KM = 30.0
 
+# --- параметры дорожной сети (v1-net) ---
+# Граница региона для скачивания графа (заполняем дырки, чтобы дороги через
+# Москву не выпадали и сеть не рвалась).
+_BORDERS = {
+    "moscow": "border_mo.gpkg",
+    "krasnodar": "border_krasnodar.gpkg",
+    "yakutia": "border_ya_center.gpkg",
+}
+# Магистральная сеть: для межгородской доступности крупные дороги важнее, чем
+# каждый дворовый проезд (и граф на порядки меньше).
+ROAD_FILTER = '["highway"~"motorway|trunk|primary|secondary"]'
+# Скорость «подъезда» от ячейки/города до ближайшего узла сети (км/ч).
+OFFROAD_KMH = 25.0
+GRAPH_DIR = _DATA / "graphs"
+
 
 def load_cities(region_key: str):
     """
@@ -211,32 +226,19 @@ def distribute_decay(
     return X_region * w / total
 
 
-def tune_gravity(
-    grid,
-    region_key: str,
-    kind: str,
-    sigmas,
-    betas=(1.0,),
-    buffer_km: float | None = DEFAULT_BUFFER_KM,
-):
+def tune_on_matrix(dist, populations, target, kind, sigmas, betas=(1.0,)):
     """
-    Подобрать (sigma, beta) для ядра `kind`, максимизируя ранговую корреляцию
-    (Spearman) веса затухания с растром населения WorldPop (`grid['population']`).
-
-    Матрица расстояний считается один раз. Возвращает
-    ((best_sigma, best_beta, best_rho), [(sigma, beta, rho), ...]).
+    Перебор (sigma, beta) для произвольной матрицы «расстояний» dist (евклид в км
+    ИЛИ время по сети в минутах), максимизируя Spearman веса с `target`.
+    Возвращает ((best_sigma, best_beta, best_rho), [(sigma, beta, rho), ...]).
     """
     from scipy.stats import spearmanr
 
-    cities = cities_gdf(region_key, grid.crs, grid=grid, buffer_km=buffer_km)
-    dist = city_distances_km(grid, cities)
-    pops = cities["population"].to_numpy()
-    target = grid["population"].to_numpy().astype(float)
-
+    target = np.asarray(target, dtype=float)
     results: list[tuple[float, float, float]] = []
     best: tuple[float, float, float] | None = None
     for beta in betas:
-        mass = city_mass(pops, beta)
+        mass = city_mass(populations, beta)
         for s in sigmas:
             w = decay_kernel(dist, s, kind) @ mass
             rho = spearmanr(w, target).correlation
@@ -248,10 +250,148 @@ def tune_gravity(
     return best, results
 
 
+def tune_gravity(
+    grid,
+    region_key: str,
+    kind: str,
+    sigmas,
+    betas=(1.0,),
+    buffer_km: float | None = DEFAULT_BUFFER_KM,
+):
+    """
+    Подобрать (sigma, beta) для ядра `kind` по евклидову расстоянию, максимизируя
+    ранговую корреляцию веса с растром населения WorldPop (`grid['population']`).
+    Матрица расстояний считается один раз.
+    """
+    cities = cities_gdf(region_key, grid.crs, grid=grid, buffer_km=buffer_km)
+    dist = city_distances_km(grid, cities)
+    return tune_on_matrix(
+        dist, cities["population"].to_numpy(), grid["population"].to_numpy(), kind, sigmas, betas
+    )
+
+
 def tune_sigma(grid, region_key: str, kind: str, sigmas, buffer_km=DEFAULT_BUFFER_KM):
     """Частный случай tune_gravity при beta=1 (обратная совместимость)."""
     (s, _b, rho), res = tune_gravity(grid, region_key, kind, sigmas, betas=(1.0,), buffer_km=buffer_km)
     return (s, rho), [(sig, r) for sig, _bb, r in res]
+
+
+# ----------------------------------------------------------------------------
+# v1-net: затухание по дорожной сети (время в пути вместо евклидова расстояния)
+# ----------------------------------------------------------------------------
+
+
+def region_polygon(region_key: str):
+    """Граница региона (EPSG:4326) с заполненными дырками — для скачивания графа."""
+    import geopandas as gpd
+    from shapely.geometry import MultiPolygon, Polygon
+    from shapely.ops import unary_union
+
+    b = gpd.read_file(_DATA / _BORDERS[region_key]).to_crs(4326)
+    geom = unary_union(b.geometry.values)
+    if isinstance(geom, Polygon):
+        return Polygon(geom.exterior)
+    return MultiPolygon([Polygon(g.exterior) for g in geom.geoms])
+
+
+def load_road_graph(region_key: str, force: bool = False):
+    """
+    Граф магистральных дорог региона с временем в пути на рёбрах (travel_time, сек).
+    Кэшируется в `data/processed/graphs/roads_<region>.graphml`.
+    Скачивание идёт через Overpass (медленно), повторный вызов читает кэш.
+    """
+    import osmnx as ox
+
+    GRAPH_DIR.mkdir(parents=True, exist_ok=True)
+    path = GRAPH_DIR / f"roads_{region_key}.graphml"
+    if path.exists() and not force:
+        return ox.io.load_graphml(path)
+
+    G = ox.graph_from_polygon(
+        region_polygon(region_key), custom_filter=ROAD_FILTER, simplify=True, retain_all=False
+    )
+    G = ox.routing.add_edge_speeds(G)
+    G = ox.routing.add_edge_travel_times(G)
+    ox.io.save_graphml(G, path)
+    return G
+
+
+def network_minutes(grid, cities, G, offroad_kmh: float = OFFROAD_KMH) -> np.ndarray:
+    """
+    Матрица времени в пути (минуты) (n_cells, n_cities): время по дорожной сети
+    между ближайшими узлами + «подъезд» от ячейки и от города до своих узлов
+    по прямой со скоростью offroad_kmh. Недостижимые пары -> inf.
+    """
+    import networkx as nx
+    import osmnx as ox
+
+    grid4326 = grid.to_crs(4326)
+    cities4326 = cities.to_crs(4326)
+    ccx = grid4326.geometry.centroid.x.to_numpy()
+    ccy = grid4326.geometry.centroid.y.to_numpy()
+    cell_nodes = np.asarray(ox.distance.nearest_nodes(G, ccx, ccy))
+    city_nodes = np.asarray(
+        ox.distance.nearest_nodes(G, cities4326.geometry.x.to_numpy(), cities4326.geometry.y.to_numpy())
+    )
+
+    # off-road подъезд (в метрах -> минуты) считаем в проекции grid.crs (метры)
+    import geopandas as gpd
+
+    nodes = list(G.nodes)
+    idx = {n: k for k, n in enumerate(nodes)}
+    node_pts = gpd.GeoSeries(
+        [Point(G.nodes[n]["x"], G.nodes[n]["y"]) for n in nodes], crs="EPSG:4326"
+    ).to_crs(grid.crs)
+    nx_arr = node_pts.x.to_numpy()
+    ny_arr = node_pts.y.to_numpy()
+
+    cents = grid.geometry.centroid
+    cell_idx = np.array([idx[n] for n in cell_nodes])
+    off_cell_min = (
+        np.hypot(cents.x.to_numpy() - nx_arr[cell_idx], cents.y.to_numpy() - ny_arr[cell_idx])
+        / 1000.0 / offroad_kmh * 60.0
+    )
+
+    cpx = cities.geometry.x.to_numpy()
+    cpy = cities.geometry.y.to_numpy()
+    city_idx = np.array([idx[n] for n in city_nodes])
+    off_city_min = (
+        np.hypot(cpx - nx_arr[city_idx], cpy - ny_arr[city_idx]) / 1000.0 / offroad_kmh * 60.0
+    )
+
+    # неориентированный вид: для доступности направление одностороннего движения
+    # несущественно, а связность графа выше (иначе из города по out-рёбрам
+    # достижима лишь часть сети).
+    UG = ox.convert.to_undirected(G)
+
+    n_cells, n_cities = len(grid), len(cities)
+    out = np.full((n_cells, n_cities), np.inf)
+    for j in range(n_cities):
+        lengths = nx.single_source_dijkstra_path_length(UG, int(city_nodes[j]), weight="travel_time")
+        sec = np.full(len(nodes), np.inf)
+        for n, s in lengths.items():
+            sec[idx[n]] = s
+        net_min = sec[cell_idx] / 60.0
+        out[:, j] = net_min + off_cell_min + off_city_min[j]
+    return out
+
+
+def distribute_decay_network(
+    grid,
+    X_region: float,
+    cities,
+    net_min: np.ndarray,
+    sigma_min: float,
+    kind: str = "exp",
+    beta: float = 1.0,
+) -> np.ndarray:
+    """Разнести X_region по ячейкам, используя время в пути по сети (v1-net)."""
+    w = gravity_weights(net_min, cities["population"].to_numpy(), sigma_min, kind, beta)
+    total = w.sum()
+    if not np.isfinite(total) or total <= 0:
+        w = np.ones(len(w))
+        total = w.sum()
+    return X_region * w / total
 
 
 def gini(values) -> float:
