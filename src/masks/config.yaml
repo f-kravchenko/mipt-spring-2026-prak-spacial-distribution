@@ -1,0 +1,30 @@
+# Параметры системы аналитических масок
+indicators:
+  Y477090007:
+    name: "Отгрузка обрабатывающей промышленности"
+    elasticity: 2.77
+    r2: 0.84
+  Y477110039:
+    name: "Внутренние затраты на НИОКР"
+    elasticity: 1.39
+    r2: 0.77
+  Y477110236:
+    name: "Объём инновационных товаров"
+    elasticity: 1.594
+    r2: 0.53
+
+distances:
+  city_sigma_km: 10.0
+  center_sigma_km: 30.0
+
+composition:
+  default_weights:
+    regression: 0.5
+    worldpop: 0.3
+    distance_to_city: 0.1
+    distance_to_center: 0.1
+
+regions:
+  Москва: "data/processed/grid_moscow_1km_features.gpkg"
+  Краснодар: "data/processed/grid_krasnodar_1km_features.gpkg"
+  Якутия: "data/processed/grid_yakutia_center_1km_features.gpkg"

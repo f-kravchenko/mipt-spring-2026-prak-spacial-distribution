@@ -1,0 +1,2 @@
+metric,mean,median,std,ci_2.5,ci_97.5,n_bootstrap
+urban_pop_elasticity_niokr,1.387,1.386,0.191,1.04,1.785,200
