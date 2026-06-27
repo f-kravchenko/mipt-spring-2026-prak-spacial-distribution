@@ -35,6 +35,7 @@ def distribute_value(grid, regional_value, indicator_code, population_col='popul
 
 MASK_DESCRIPTION = {
     "name": "regression_mask",
+    "title": "Регрессия по населению",
     "source": "Регрессия на 87 регионах России (Росстат 2023)",
     "signal": "Концентрация показателя в городских центрах",
     "influence_type": "повышающий",

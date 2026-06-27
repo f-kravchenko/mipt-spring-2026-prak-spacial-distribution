@@ -34,6 +34,7 @@ def distribute_value(grid, regional_value, area_col='area_km2'):
 
 MASK_DESCRIPTION = {
     "name": "baseline_mask",
+    "title": "Базовая (по площади)",
     "source": "Геометрия сетки",
     "signal": "Эталон равномерного распределения",
     "influence_type": "нейтральный",

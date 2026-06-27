@@ -1,0 +1,15 @@
+# StorageClass с volumeBindingMode=Immediate поверх того же провайдера, что и
+# дефолтный microk8s-hostpath. Нужен для backup-PVC: его монтирует только ночной
+# CronJob, поэтому при WaitForFirstConsumer PVC висит Pending, а `helm upgrade
+# --wait` ждёт его Bound и падает по таймауту на каждом деплое. Immediate-класс
+# биндит том сразу, и деплой проходит.
+#
+# Применить один раз (кластерный ресурс, вне Helm-релиза):
+#   kubectl apply -f deploy/storageclass-hostpath-immediate.yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: hostpath-immediate
+provisioner: microk8s.io/hostpath
+reclaimPolicy: Delete
+volumeBindingMode: Immediate

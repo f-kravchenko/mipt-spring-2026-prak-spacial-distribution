@@ -1,27 +1,32 @@
-from .spatial_decay import (
-    cities_gdf,
-    city_mass,
-    configure_osmnx,
-    decay_kernel,
-    distribute_decay,
-    distribute_decay_network,
-    gini,
-    gravity_weights,
-    load_cities,
-    load_road_graph,
-    network_minutes,
-    region_polygon,
-    top_share,
-    tune_gravity,
-    tune_on_matrix,
-    tune_sigma,
-)
-from .spatial_maxent import (
-    build_cell_features,
-    constraint_targets,
-    distribute_maxent,
-    maxent_weights,
-)
+# Исследовательские модули v1/v4 (osmnx, scipy) опциональны: ETL и система масок
+# их не требуют. Мягкий импорт — чтобы пакет импортировался и в slim-образе ETL.
+try:
+    from .spatial_decay import (
+        cities_gdf,
+        city_mass,
+        configure_osmnx,
+        decay_kernel,
+        distribute_decay,
+        distribute_decay_network,
+        gini,
+        gravity_weights,
+        load_cities,
+        load_road_graph,
+        network_minutes,
+        region_polygon,
+        top_share,
+        tune_gravity,
+        tune_on_matrix,
+        tune_sigma,
+    )
+    from .spatial_maxent import (
+        build_cell_features,
+        constraint_targets,
+        distribute_maxent,
+        maxent_weights,
+    )
+except ImportError:
+    pass
 
 __all__ = [
     # v1 — затухание

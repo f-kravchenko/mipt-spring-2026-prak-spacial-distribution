@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "spatial-masks.fullname" . }}-tiles
+  labels:
+    {{- include "spatial-masks.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: tiles
+  ports:
+    - port: 3000
+      targetPort: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "spatial-masks.fullname" . }}-tiles
+  labels:
+    {{- include "spatial-masks.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.tiles.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: tiles
+  template:
+    metadata:
+      labels:
+        {{- include "spatial-masks.labels" . | nindent 8 }}
+        app.kubernetes.io/component: tiles
+    spec:
+      containers:
+        - name: martin
+          image: "{{ .Values.images.tiles.repository }}:{{ .Values.images.tiles.tag }}"
+          imagePullPolicy: {{ .Values.images.tiles.pullPolicy }}
+          # Без config-файла: martin при заданном DATABASE_URL авто-публикует все
+          # таблицы с геометрией и функции-тайлы. id источника = имя функции
+          # (tile_mask / tile_distribution) — ровно то, что ждёт фронт.
+          env:
+            {{- include "spatial-masks.dbEnv" (dict "ctx" . "scheme" "postgres") | nindent 12 }}
+          ports:
+            - containerPort: 3000
+          readinessProbe:
+            httpGet: { path: /health, port: 3000 }
+            initialDelaySeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 3000 }
+            initialDelaySeconds: 20
+          resources:
+            {{- toYaml .Values.tiles.resources | nindent 12 }}

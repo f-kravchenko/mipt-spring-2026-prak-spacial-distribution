@@ -15,6 +15,7 @@ def compute_center_mask(grid, distance_col='dist_to_center_km', sigma=30.0):
 
 MASK_DESCRIPTION = {
     "name": "distance_to_center_mask",
+    "title": "Близость к центру региона",
     "source": "Расстояние до регионального центра",
     "signal": "Близость к столице как прокси активности",
     "influence_type": "повышающий",

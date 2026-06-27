@@ -1,0 +1,62 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "spatial-masks.fullname" . }}-web
+  labels:
+    {{- include "spatial-masks.labels" . | nindent 4 }}
+data:
+  # Runtime-конфиг фронта (заменяет public/config.js в образе).
+  config.js: |
+    window.__APP_CONFIG__ = { apiBase: "{{ include "spatial-masks.publicBase" . }}" };
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "spatial-masks.fullname" . }}-web
+  labels:
+    {{- include "spatial-masks.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: web
+  ports:
+    - port: 80
+      targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "spatial-masks.fullname" . }}-web
+  labels:
+    {{- include "spatial-masks.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.web.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        {{- include "spatial-masks.labels" . | nindent 8 }}
+        app.kubernetes.io/component: web
+    spec:
+      containers:
+        - name: web
+          image: "{{ .Values.images.web.repository }}:{{ .Values.images.web.tag }}"
+          imagePullPolicy: {{ .Values.images.web.pullPolicy }}
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet: { path: /, port: 80 }
+            initialDelaySeconds: 5
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /usr/share/nginx/html/config.js
+              subPath: config.js
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "spatial-masks.fullname" . }}-web

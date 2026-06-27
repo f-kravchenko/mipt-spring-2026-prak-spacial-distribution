@@ -1,0 +1,115 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  # Push из раннер-пода идёт на ClusterIP-сервис реестра (надёжно через cluster-DNS;
+  # NodePort на LAN-IP ноды из пода недостижим — context deadline exceeded).
+  BUILD_REGISTRY: registry.container-registry.svc.cluster.local:5000
+  # Pull при деплое выполняет containerd на ноде. 192.168.1.96 после перехода на
+  # IPv6 недостижим даже с ноды, поэтому тянем через localhost:32000 — штатный
+  # путь MicroK8s-аддона реестра (прописан в containerd hosts.toml). Тот же реестр,
+  # repo-путь образа одинаков — отличается только endpoint.
+  DEPLOY_REGISTRY: localhost:32000
+
+jobs:
+  build-api:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Build api image
+        run: |
+          docker build \
+            -t $BUILD_REGISTRY/spatial-masks-api:${{ github.sha }} \
+            -t $BUILD_REGISTRY/spatial-masks-api:latest \
+            -f apps/api/Dockerfile \
+            apps/api/
+
+      - name: Push api image
+        run: |
+          docker push $BUILD_REGISTRY/spatial-masks-api:${{ github.sha }}
+          docker push $BUILD_REGISTRY/spatial-masks-api:latest
+
+  build-web:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Build web image
+        run: |
+          docker build \
+            -t $BUILD_REGISTRY/spatial-masks-web:${{ github.sha }} \
+            -t $BUILD_REGISTRY/spatial-masks-web:latest \
+            -f apps/web/Dockerfile \
+            apps/web/
+
+      - name: Push web image
+        run: |
+          docker push $BUILD_REGISTRY/spatial-masks-web:${{ github.sha }}
+          docker push $BUILD_REGISTRY/spatial-masks-web:latest
+
+  build-etl:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Build etl image
+        run: |
+          docker build \
+            -t $BUILD_REGISTRY/spatial-masks-etl:${{ github.sha }} \
+            -t $BUILD_REGISTRY/spatial-masks-etl:latest \
+            -f Dockerfile.etl \
+            .
+
+      - name: Push etl image
+        run: |
+          docker push $BUILD_REGISTRY/spatial-masks-etl:${{ github.sha }}
+          docker push $BUILD_REGISTRY/spatial-masks-etl:latest
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [build-api, build-web, build-etl]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Deploy with Helm
+        run: |
+          tar -c -C deploy/helm/spatial-masks . | docker run --rm -i --net=host \
+            -v /kubeconfig/client.config:/tmp/kubeconfig:ro \
+            --entrypoint sh \
+            alpine/helm:3.17.1 \
+            -c '
+              mkdir -p /chart /root/.kube
+              tar -x -C /chart
+              # API по LAN-IP ноды из пода недостижим (как и реестр) — ходим через
+              # in-cluster endpoint kubernetes.default.svc:443 (сервис слушает 443, не 16443).
+              sed "s#127.0.0.1:16443#kubernetes.default.svc:443#g" /tmp/kubeconfig > /root/.kube/config
+              helm upgrade --install spatial-masks /chart/ \
+                --namespace masks \
+                --create-namespace \
+                --set images.api.repository=$0/spatial-masks-api \
+                --set images.api.tag=$1 \
+                --set images.web.repository=$0/spatial-masks-web \
+                --set images.web.tag=$1 \
+                --set etl.image.repository=$0/spatial-masks-etl \
+                --set etl.image.tag=$1 \
+                --set postgres.deploy=false \
+                --set postgres.host=postgres-postgres.database.svc.cluster.local \
+                --set postgres.existingSecret=masks-db-credentials \
+                --set postgres.existingSecretPasswordKey=password \
+                --set ingress.className=public \
+                --set ingress.host=deaggr.kravchenko.cloud \
+                --set public.url=https://deaggr.kravchenko.cloud \
+                --set ingress.tls=false \
+                --set ingress.sslRedirect=false \
+                --wait --timeout 600s
+            ' "$DEPLOY_REGISTRY" "${{ github.sha }}"

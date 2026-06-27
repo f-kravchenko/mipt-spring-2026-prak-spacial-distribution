@@ -1,0 +1,14 @@
+# Зависимости только для ETL (гео-IO + запись в PostGIS).
+# Без rasterio/osmnx/sklearn/jupyter — они нужны ноутбукам, не загрузчику.
+# Всё ставится готовыми wheel'ами (fiona/pyproj/shapely везут GDAL с собой).
+pandas>=2.0
+numpy>=1.24
+pyarrow>=14.0
+geopandas>=0.14
+shapely>=2.0
+pyogrio>=0.8
+pyproj>=3.6
+sqlalchemy>=2.0
+geoalchemy2>=0.14
+psycopg[binary]>=3.1
+pyyaml>=6.0

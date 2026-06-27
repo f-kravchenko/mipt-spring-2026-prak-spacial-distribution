@@ -1,0 +1,104 @@
+# Значения по умолчанию для чарта spatial-masks.
+
+# Стоковый PostGIS-образ (arm64) для migrate-Job, backup-CronJob и встроенной БД.
+# Не собираем свой — нужен только psql/pg_dump; SQL миграций едет из ConfigMap.
+postgisImage: imresamu/postgis-arm64:16-3.6-alpine
+
+# Собираемые образы (теги переопределяются в CI).
+images:
+  tiles:
+    repository: ghcr.io/maplibre/martin
+    tag: v0.13.0
+    pullPolicy: IfNotPresent
+  api:
+    repository: ghcr.io/f-kravchenko/spatial-masks-api
+    tag: latest
+    pullPolicy: IfNotPresent
+  web:
+    repository: ghcr.io/f-kravchenko/spatial-masks-web
+    tag: latest
+    pullPolicy: IfNotPresent
+
+# Браузерный адрес сервиса. За внешним reverse-proxy (другой VPS, где
+# терминируется TLS) клиент ходит по https://<домен>, а внутрь идёт HTTP.
+# Из publicBase строятся apiBase (фронт) и TILES_BASE_URL (API) — то, что
+# реально уходит в браузер, поэтому это ПУБЛИЧНЫЙ домен, не внутренний адрес.
+public:
+  scheme: https           # как клиент обращается к сервису (TLS на фронт-VPS)
+  url: ""                 # полный override, если домен фронта != ingress.host
+
+# Внутренний Ingress (за внешним прокси). api → /api, тайлы → /tiles, фронт → /.
+ingress:
+  enabled: true
+  className: public         # MicroK8s rsp-main: рабочий класс (как у gitea/binance)
+  host: masks.example.com   # Host, который шлёт фронт-VPS (для матчинга правил)
+  tls: false                # внутр. TLS обычно выкл. — терминируется на фронт-VPS
+  tlsSecretName: spatial-masks-tls
+  sslRedirect: false        # не форсить https внутри кластера (за внешним прокси)
+
+# Postgres. По умолчанию — ВНЕШНИЙ (уже развёрнут в отдельном namespace).
+# Сервис достижим cross-ns по FQDN: <svc>.<ns>.svc.cluster.local.
+postgres:
+  deploy: false                                    # true → поднять свой StatefulSet (db ниже)
+  host: postgres-rw.databases.svc.cluster.local    # адрес внешнего Postgres
+  port: 5432
+  user: masks
+  database: masks
+  # Пароль: либо из секрета в ТЕКУЩЕМ ns (секреты не читаются cross-ns),
+  # либо из value ниже (тогда чарт создаст секрет сам).
+  existingSecret: ""                               # имя Secret в этом ns с паролем
+  existingSecretPasswordKey: password              # ключ пароля в этом Secret
+  password: ""                                     # используется, если existingSecret пуст
+
+# Параметры собственного Postgres (только при postgres.deploy=true).
+db:
+  persistence:
+    size: 10Gi
+    storageClass: ""
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { memory: 1Gi }
+
+tiles:
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 512Mi }
+
+api:
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 512Mi }
+
+web:
+  replicas: 1
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 128Mi }
+
+# Накат миграций (pre-install/pre-upgrade хук-Job, образ db с SQL + psql).
+migrate:
+  enabled: true
+
+# Резервное копирование БД (CronJob с pg_dump в PVC).
+backup:
+  enabled: true
+  schedule: "0 3 * * *"     # каждый день в 03:00
+  retentionDays: 7
+  persistence:
+    size: 5Gi
+    # ВАЖНО: класс с volumeBindingMode=Immediate. Дефолтный microk8s-hostpath —
+    # WaitForFirstConsumer, поэтому backup-PVC (его монтирует только ночной
+    # CronJob) висит Pending, а `helm upgrade --wait` ждёт его привязки и падает
+    # по таймауту на КАЖДОМ деплое. Immediate-класс биндится сразу.
+    # SC создаётся отдельно (см. deploy/storageclass-hostpath-immediate.yaml).
+    storageClass: "hostpath-immediate"
+
+# Разовая загрузка данных (Job). Требует образ с geopandas + кодом + данными.
+etl:
+  enabled: false
+  image:
+    repository: ghcr.io/f-kravchenko/spatial-masks-etl
+    tag: latest
+  dataClaim: ""             # имя существующего PVC с data/ (parquet, gpkg)

@@ -1,0 +1,16 @@
+spatial-masks развёрнут.
+
+Домен: {{ include "spatial-masks.publicBase" . }}
+  Фронт:   {{ include "spatial-masks.publicBase" . }}/
+  API:     {{ include "spatial-masks.publicBase" . }}/api/regions
+  Тайлы:   {{ include "spatial-masks.publicBase" . }}/tiles/tile_mask/{z}/{x}/{y}?mask=worldpop_mask
+
+Postgres: {{ if .Values.postgres.deploy }}свой StatefulSet{{ else }}внешний — {{ .Values.postgres.host }}:{{ .Values.postgres.port }}/{{ .Values.postgres.database }}{{ end }}
+Пароль: секрет {{ include "spatial-masks.dbSecretName" . }} (ключ {{ include "spatial-masks.dbPasswordKey" . }}) в этом namespace.
+
+Загрузка данных (если etl.enabled=false — запустить вручную):
+  kubectl run etl --rm -it --image=<etl-image> \
+    --env DATABASE_URL=postgresql+psycopg://{{ .Values.postgres.user }}:<pwd>@{{ include "spatial-masks.dbHost" . }}:{{ .Values.postgres.port }}/{{ .Values.postgres.database }} \
+    -- python -m etl.ingest --config etl/config.yaml
+
+Бэкапы: {{ if .Values.backup.enabled }}CronJob по расписанию {{ .Values.backup.schedule }} в PVC {{ include "spatial-masks.fullname" . }}-backups{{ else }}выключены{{ end }}.

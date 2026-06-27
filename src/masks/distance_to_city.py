@@ -16,6 +16,7 @@ def compute_distance_mask(grid, distance_col='dist_to_city_km', sigma=10.0):
 
 MASK_DESCRIPTION = {
     "name": "distance_to_city_mask",
+    "title": "Близость к городам",
     "source": "Расстояние до ближайшего города из OSM",
     "signal": "Близость к городам как прокси доступа к рынкам и трудовым ресурсам",
     "influence_type": "повышающий",

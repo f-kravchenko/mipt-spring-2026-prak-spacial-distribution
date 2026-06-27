@@ -1,0 +1,8 @@
+apiVersion: v2
+name: spatial-masks
+description: >-
+  Система пространственной дезагрегации региональных показателей через
+  аналитические маски: PostGIS + Martin (тайлы) + FastAPI + MapLibre-фронт.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

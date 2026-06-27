@@ -24,6 +24,7 @@ def distribute_value(grid, regional_value, population_col='population'):
 
 MASK_DESCRIPTION = {
     "name": "worldpop_mask",
+    "title": "Население (WorldPop)",
     "source": "WorldPop Russia 2020, 100 м",
     "signal": "Плотность населения как прокси активности",
     "influence_type": "повышающий",

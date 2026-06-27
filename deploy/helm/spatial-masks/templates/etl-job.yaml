@@ -1,0 +1,31 @@
+{{- if .Values.etl.enabled }}
+# Разовая загрузка данных в PostGIS. Запускается как helm-hook после деплоя.
+# Требует образ с geopandas + кодом репозитория и PVC с data/ (parquet, gpkg).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "spatial-masks.fullname" . }}-etl
+  labels:
+    {{- include "spatial-masks.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: etl
+          image: "{{ .Values.etl.image.repository }}:{{ .Values.etl.image.tag }}"
+          command: ["python", "-m", "etl.ingest", "--config", "etl/config.yaml"]
+          env:
+            {{- include "spatial-masks.dbEnv" (dict "ctx" . "scheme" "postgresql+psycopg") | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Values.etl.dataClaim }}
+{{- end }}

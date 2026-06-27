@@ -1,0 +1,15 @@
+# Образ для разовой загрузки данных (ETL) в PostGIS.
+# python:3.12-slim достаточно: geopandas/fiona/pyproj/shapely ставятся wheel'ами
+# с собственным GDAL, отдельная GDAL-база не нужна.
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY etl/requirements.txt etl/requirements.txt
+RUN pip install --no-cache-dir -r etl/requirements.txt
+
+COPY src ./src
+COPY etl ./etl
+
+# data/ монтируется как volume (parquet, gpkg) в рантайме.
+CMD ["python", "-m", "etl.ingest", "--config", "etl/config.yaml"]

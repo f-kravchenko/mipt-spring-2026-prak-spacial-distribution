@@ -1,0 +1,64 @@
+{{- if .Values.ingress.enabled }}
+{{- $fullname := include "spatial-masks.fullname" . -}}
+{{- $host := .Values.ingress.host -}}
+# Тайлы: префикс /tiles вырезается, Martin получает /tile_mask/... напрямую.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullname }}-tiles
+  labels:
+    {{- include "spatial-masks.labels" . | nindent 4 }}
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/ssl-redirect: {{ .Values.ingress.sslRedirect | quote }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls }}
+  tls:
+    - hosts: [{{ $host | quote }}]
+      secretName: {{ .Values.ingress.tlsSecretName }}
+  {{- end }}
+  rules:
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          - path: /tiles(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $fullname }}-tiles
+                port: { number: 3000 }
+---
+# API и фронт без rewrite: /api → api, / → web.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullname }}-app
+  labels:
+    {{- include "spatial-masks.labels" . | nindent 4 }}
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: {{ .Values.ingress.sslRedirect | quote }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls }}
+  tls:
+    - hosts: [{{ $host | quote }}]
+      secretName: {{ .Values.ingress.tlsSecretName }}
+  {{- end }}
+  rules:
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullname }}-api
+                port: { number: 8000 }
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullname }}-web
+                port: { number: 80 }
+{{- end }}

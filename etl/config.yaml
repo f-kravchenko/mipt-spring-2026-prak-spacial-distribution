@@ -1,0 +1,97 @@
+# Конфиг ETL: пути к исходным данным и параметры загрузки в PostGIS.
+# Нет абсолютных путей — всё относительно корня репозитория.
+
+rosstat_parquet: "data/raw/Массив Данных в формате Parquet/Показатели по регионам.parquet"
+year: 2023
+
+# object_name в parquet -> файлы сетки и границы + slug для БД
+regions:
+  - slug: moscow
+    name: "Московская область"
+    object_name: "Московская область"
+    grid: "data/processed/grid_moscow_1km_features.gpkg"
+    border: "data/processed/border_mo.gpkg"
+    cities: "data/processed/cities_moscow.csv"
+    roads: "data/processed/graphs/roads_moscow.graphml"
+    traveltime: "data/processed/traveltime_moscow.csv"
+    railway: "data/processed/railway_moscow.csv"
+    power: "data/processed/power_moscow.csv"
+    territory: "data/processed/territory_moscow.csv"
+  - slug: krasnodar
+    name: "Краснодарский край"
+    object_name: "Краснодарский край"
+    grid: "data/processed/grid_krasnodar_1km_features.gpkg"
+    border: "data/processed/border_krasnodar.gpkg"
+    cities: "data/processed/cities_krasnodar.csv"
+    roads: "data/processed/graphs/roads_krasnodar.graphml"
+    railway: "data/processed/railway_krasnodar.csv"
+    power: "data/processed/power_krasnodar.csv"
+    territory: "data/processed/territory_krasnodar.csv"
+  - slug: yakutia_center
+    name: "Республика Саха (Якутия), центр"
+    object_name: "Республика Саха (Якутия)"
+    grid: "data/processed/grid_yakutia_center_1km_features.gpkg"
+    border: "data/processed/border_ya_center.gpkg"
+    cities: "data/processed/cities_yakutia.csv"
+    roads: "data/processed/graphs/roads_yakutia.graphml"
+    railway: "data/processed/railway_yakutia.csv"
+    power: "data/processed/power_yakutia.csv"
+    territory: "data/processed/territory_yakutia.csv"
+    traveltime: "data/processed/traveltime_yakutia.csv"
+
+indicators:
+  Y477090007:
+    name: "Объём отгруженных товаров обрабатывающей промышленности"
+    unit: "млн руб."
+    indicator_type: industrial
+    elasticity: 2.77
+    r2: 0.84
+  Y477110039:
+    name: "Внутренние затраты на исследования и разработки"
+    unit: "млн руб."
+    indicator_type: investment
+    elasticity: 1.39
+    r2: 0.77
+  Y477110236:
+    name: "Объём инновационных товаров"
+    unit: "млн руб."
+    indicator_type: industrial
+    elasticity: 1.594
+    r2: 0.53
+
+# Итоговая композиция (как у Полины) + конфигурации ablation (§9.5 ТЗ).
+final_weights:
+  regression: 0.5
+  worldpop: 0.3
+  distance_to_city: 0.1
+  distance_to_center: 0.1
+
+ablation:
+  - label: "all_5_masks"
+    masks: [regression, worldpop, distance_to_city, distance_to_center]
+    weights: {regression: 0.5, worldpop: 0.3, distance_to_city: 0.1, distance_to_center: 0.1}
+  - label: "no_regression"
+    masks: [worldpop, distance_to_city, distance_to_center]
+    weights: {worldpop: 0.5, distance_to_city: 0.25, distance_to_center: 0.25}
+  - label: "no_worldpop"
+    masks: [regression, distance_to_city, distance_to_center]
+    weights: {regression: 0.7, distance_to_city: 0.15, distance_to_center: 0.15}
+  - label: "no_distance_to_city"
+    masks: [regression, worldpop, distance_to_center]
+    weights: {regression: 0.6, worldpop: 0.3, distance_to_center: 0.1}
+  - label: "no_distance_to_center"
+    masks: [regression, worldpop, distance_to_city]
+    weights: {regression: 0.6, worldpop: 0.3, distance_to_city: 0.1}
+  - label: "only_regression"
+    masks: [regression]
+    weights: null
+  - label: "only_worldpop"
+    masks: [worldpop]
+    weights: null
+  - label: "only_baseline"
+    masks: [baseline]
+    weights: null
+
+distances:
+  city_sigma_km: 10.0
+  center_sigma_km: 30.0

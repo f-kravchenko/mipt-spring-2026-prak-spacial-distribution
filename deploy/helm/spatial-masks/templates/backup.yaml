@@ -1,0 +1,60 @@
+{{- if .Values.backup.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "spatial-masks.fullname" . }}-backups
+  labels:
+    {{- include "spatial-masks.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.backup.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.backup.persistence.size }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "spatial-masks.fullname" . }}-backup
+  labels:
+    {{- include "spatial-masks.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-dump
+              image: {{ .Values.postgisImage | quote }}
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "spatial-masks.dbSecretName" . }}
+                      key: {{ include "spatial-masks.dbPasswordKey" . }}
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  TS=$(date +%Y%m%d-%H%M%S)
+                  pg_dump -h {{ include "spatial-masks.dbHost" . }} -p {{ .Values.postgres.port }} \
+                    -U {{ .Values.postgres.user }} -d {{ .Values.postgres.database }} \
+                    -Fc -f /backups/masks-$TS.dump
+                  find /backups -name 'masks-*.dump' -mtime +{{ .Values.backup.retentionDays }} -delete
+                  echo "backup done: masks-$TS.dump"
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: {{ include "spatial-masks.fullname" . }}-backups
+{{- end }}

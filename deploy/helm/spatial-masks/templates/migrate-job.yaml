@@ -1,0 +1,58 @@
+{{- if .Values.migrate.enabled }}
+# Накат миграций. Helm pre-install/pre-upgrade хук — выполняется ДО подов,
+# чтобы martin при старте уже видел функции-тайлы. Стоковый PostGIS-образ
+# (psql), SQL приезжает из ConfigMap. Миграции идемпотентны.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "spatial-masks.fullname" . }}-migrate
+  labels:
+    {{- include "spatial-masks.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        {{- include "spatial-masks.labels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: {{ .Values.postgisImage | quote }}
+          env:
+            - name: PGHOST
+              value: {{ include "spatial-masks.dbHost" . | quote }}
+            - name: PGPORT
+              value: {{ .Values.postgres.port | quote }}
+            - name: PGUSER
+              value: {{ .Values.postgres.user | quote }}
+            - name: PGDATABASE
+              value: {{ .Values.postgres.database | quote }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "spatial-masks.dbSecretName" . }}
+                  key: {{ include "spatial-masks.dbPasswordKey" . }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              for f in /sql/*.sql; do
+                echo ">> applying $f"
+                psql -v ON_ERROR_STOP=1 -f "$f"
+              done
+              echo "migrations applied"
+          volumeMounts:
+            - name: sql
+              mountPath: /sql
+      volumes:
+        - name: sql
+          configMap:
+            name: {{ include "spatial-masks.fullname" . }}-migrations
+{{- end }}

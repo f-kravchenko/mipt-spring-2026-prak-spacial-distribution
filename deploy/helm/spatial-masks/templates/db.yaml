@@ -1,0 +1,90 @@
+{{- if .Values.postgres.deploy }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "spatial-masks.fullname" . }}-db
+  labels:
+    {{- include "spatial-masks.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: db
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "spatial-masks.fullname" . }}-db
+  labels:
+    {{- include "spatial-masks.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "spatial-masks.fullname" . }}-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: db
+  template:
+    metadata:
+      labels:
+        {{- include "spatial-masks.labels" . | nindent 8 }}
+        app.kubernetes.io/component: db
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.postgisImage | quote }}
+          env:
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.user | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.database | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "spatial-masks.dbSecretName" . }}
+                  key: {{ include "spatial-masks.dbPasswordKey" . }}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "{{ .Values.postgres.user }}"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "{{ .Values.postgres.user }}"]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            {{- toYaml .Values.db.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            {{- if .Values.migrate.enabled }}
+            - name: migrations
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            {{- end }}
+      {{- if .Values.migrate.enabled }}
+      volumes:
+        - name: migrations
+          configMap:
+            name: {{ include "spatial-masks.fullname" . }}-migrations
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.db.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.db.persistence.size }}
+{{- end }}
