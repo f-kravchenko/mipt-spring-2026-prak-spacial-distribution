@@ -7,6 +7,9 @@
 aeroway на регион (зеркало mail.ru), классифицирует полигоны, делает
 point-in-polygon и пишет data/processed/territory_<slug>.csv (cell_code, weight).
 
+Баллы классов и OSM-теги — в src/masks/territory_scores.yaml (см. src/territory_config.py).
+Чтобы поменять веса или добавить класс, править нужно только конфиг.
+
 Запуск (venv с osmnx):
     python scripts/compute_territory.py
 """
@@ -21,6 +24,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import src.spatial_decay as sd
+from src.territory_config import build_score_maps
 
 ox.settings.use_cache = True
 ox.settings.cache_folder = "cache/osmnx"
@@ -28,23 +32,8 @@ ox.settings.overpass_url = "https://maps.mail.ru/osm/tools/overpass/api"
 ox.settings.overpass_rate_limit = False
 ox.settings.requests_timeout = 300
 
-# значение тега -> балл пригодности (0..1)
-LANDUSE_SCORE = {
-    "industrial": 1.00,
-    "railway": 0.80,
-    "residential": 0.70, "commercial": 0.70, "retail": 0.70,
-    "farmland": 0.35, "meadow": 0.35, "orchard": 0.35, "vineyard": 0.35,
-    "forest": 0.10,
-    "reservoir": 0.0, "basin": 0.0,
-}
-NATURAL_SCORE = {"water": 0.0, "wood": 0.10}
-AEROWAY_SCORE = {"aerodrome": 0.80}
-
-TAGS = {
-    "landuse": list(LANDUSE_SCORE),
-    "natural": list(NATURAL_SCORE),
-    "aeroway": list(AEROWAY_SCORE),
-}
+# значение тега -> балл пригодности (0..1); источник — src/masks/territory_scores.yaml
+LANDUSE_SCORE, NATURAL_SCORE, AEROWAY_SCORE, TAGS = build_score_maps()
 
 REGIONS = [
     ("moscow", "moscow", "data/processed/grid_moscow_1km_features.gpkg"),

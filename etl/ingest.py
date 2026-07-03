@@ -22,8 +22,8 @@ from sqlalchemy import create_engine, text
 
 # Логика масок переиспользуется как есть — единый источник истины.
 from src.masks import (
-    baseline, worldpop, regression, distance_to_city, distance_to_center, composition,
-    road_network, road_traveltime, railway, power, territory,
+    baseline, territory, worldpop, regression, distance_to_city, distance_to_center, composition,
+    road_network, road_traveltime, railway, power,
 )
 from src.masks import metrics
 

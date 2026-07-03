@@ -17,6 +17,30 @@ from .schemas import (
     Composition, Indicator, Mask, RecomputeRequest, RecomputeResult, Region, ServiceConfig,
 )
 
+# Автоподбор весов (§9 "обоснование весов") — считается в Python
+# (src/masks/weighting.py), а не в SQL, в отличие от самого /api/recompute.
+# Нужны сами модули масок, чтобы перевести внутренние ключи weighting.py
+# (regression, worldpop, ..., territory, power) в mask.slug из таблицы mask —
+# слаг для territory и power не следует общему паттерну "{ключ}_mask"
+# (territory_type_mask, power_lines_mask), поэтому мэппинг явный, а не f-строка.
+from src.masks import (
+    baseline, worldpop, regression, distance_to_city, distance_to_center,
+    territory, road_network, railway, road_traveltime, power, weighting,
+)
+
+_MASK_SLUG = {
+    "baseline": baseline.MASK_DESCRIPTION["name"],
+    "worldpop": worldpop.MASK_DESCRIPTION["name"],
+    "regression": regression.MASK_DESCRIPTION["name"],
+    "distance_to_city": distance_to_city.MASK_DESCRIPTION["name"],
+    "distance_to_center": distance_to_center.MASK_DESCRIPTION["name"],
+    "territory": territory.MASK_DESCRIPTION["name"],
+    "road_network": road_network.MASK_DESCRIPTION["name"],
+    "railway": railway.MASK_DESCRIPTION["name"],
+    "road_traveltime": road_traveltime.MASK_DESCRIPTION["name"],
+    "power": power.MASK_DESCRIPTION["name"],
+}
+
 app = FastAPI(title="Spatial Masks API", version="1.0")
 
 app.add_middleware(
@@ -112,6 +136,69 @@ def masks():
     ]
 
 
+@app.get("/api/mask-peaks")
+def mask_peaks(
+    region_id: int = Query(...),
+    mask: str = Query(...),
+    indicator: str | None = Query(None),
+    frac: float = Query(0.05, ge=0.0, le=0.5),
+):
+    """
+    Порог "пика" для ОТДЕЛЬНОГО слоя (ТЗ п.2 — тепловая карта с пиками
+    топ 5-10% для каждого слоя, не только для суммарного, см. п.4 в
+    /api/recompute -> peak_threshold). Тот же приём: percentile_cont по
+    значениям слоя в регионе, фронт сравнивает ["get","weight"] >= threshold
+    MapLibre-выражением — отдельно считать пики на фронте не нужно.
+
+    indicator обязателен только для indicator_dependent масок (сейчас — только
+    regression); для остальных не передаётся, mcv.indicator_code = ''.
+    """
+    sql = text("""
+        SELECT percentile_cont(:p) WITHIN GROUP (ORDER BY mcv.weight) AS threshold
+        FROM mask_cell_value mcv
+        JOIN grid_cell gc ON gc.id = mcv.cell_id
+        JOIN mask m ON m.id = mcv.mask_id
+        WHERE gc.region_id = :r AND m.slug = :slug
+          AND mcv.indicator_code IN ('', COALESCE(:i, ''))
+    """)
+    with engine.connect() as conn:
+        row = conn.execute(
+            sql, {"p": 1 - frac, "r": region_id, "slug": mask, "i": indicator}
+        ).mappings().first()
+    if row is None or row["threshold"] is None:
+        raise HTTPException(404, "Нет данных маски для региона/показателя")
+    return {"peak_threshold": float(row["threshold"])}
+
+
+@app.get("/api/default-weights", response_model=dict[str, float])
+def default_weights(indicator: str = Query(...)):
+    """
+    Автоподбор весов композиции под показатель (§9 "обоснование весов"):
+    вес regression = r2 калибровки, остаток делится между общими и
+    промышленными масками — см. src/masks/weighting.resolve_weights.
+
+    r2/indicator_type берутся из БД (та же таблица, что отдаёт /api/indicators) —
+    единственный источник истины для рантайма; src/masks/config.yaml используется
+    weighting.py только для приоров (proxy_priors/industrial_priors), которым
+    негде больше храниться, но не для r2/category — их сюда передаём явно,
+    чтобы не тянуть в API ещё один рассинхронизированный источник данных.
+    """
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT r2, indicator_type FROM indicator WHERE code = :c"),
+            {"c": indicator},
+        ).mappings().first()
+    if row is None:
+        raise HTTPException(404, f"Показатель {indicator} не найден")
+
+    indicator_meta = {"r2": row["r2"], "category": row["indicator_type"]}
+    weights_internal = weighting.resolve_weights(indicator, indicator_meta=indicator_meta)
+
+    # internal key -> mask.slug; неизвестные ключи молча пропускаем, а не падаем,
+    # чтобы новая маска без записи в _MASK_SLUG не роняла весь эндпоинт
+    return {_MASK_SLUG[k]: v for k, v in weights_internal.items() if k in _MASK_SLUG}
+
+
 @app.get("/api/compositions", response_model=list[Composition])
 def compositions(
     region_id: int | None = Query(None),
@@ -179,6 +266,9 @@ _RV_SQL = text("""
 """)
 
 # Взвешенная сумма масок по ячейкам + агрегаты для нормировки и метрик.
+# peak.p95 — 95-й перцентиль raw по ячейкам региона (top 5%, тот же top_frac,
+# что дефолт composition.detect_peaks(method="percentile")) — используется
+# ниже, чтобы посчитать peak_threshold в тех же единицах, что value_max.
 _AGG_SQL = text("""
     WITH wt AS (
         SELECT m.id AS mask_id, (e.value)::double precision AS w
@@ -204,16 +294,21 @@ _AGG_SQL = text("""
             SELECT raw FROM cell ORDER BY raw DESC
             LIMIT GREATEST((SELECT ceil(0.1 * n)::int FROM agg), 1)
         ) z
+    ),
+    peak AS (
+        SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY raw) AS p95 FROM cell
     )
-    SELECT a.n AS n, a.s AS total, a.mx AS rawmax, g.g AS gini, top.t10 AS t10
-    FROM agg a CROSS JOIN gini g CROSS JOIN top
+    SELECT a.n AS n, a.s AS total, a.mx AS rawmax, g.g AS gini, top.t10 AS t10,
+           peak.p95 AS p95
+    FROM agg a CROSS JOIN gini g CROSS JOIN top CROSS JOIN peak
 """)
 
 
 @app.post("/api/recompute", response_model=RecomputeResult)
 def recompute(req: RecomputeRequest):
     """Живой пересчёт распределения по произвольным весам масок.
-    Считает regional_value, нормировку и метрики; тайлы рисует tile_composition."""
+    Считает regional_value, нормировку, метрики и порог пиков; тайлы рисует
+    tile_composition."""
     weights = {k: v for k, v in req.weights.items() if v}
     if not weights:
         raise HTTPException(400, "Задайте хотя бы один ненулевой вес")
@@ -233,6 +328,7 @@ def recompute(req: RecomputeRequest):
     rv = float(rv)
     total = float(row["total"])
     value_max = float(row["rawmax"]) * rv / total
+    peak_threshold = float(row["p95"]) * rv / total if row["p95"] is not None else None
     metrics = {
         "gini": float(row["gini"]) if row["gini"] is not None else 0.0,
         "top10_share": float(row["t10"]) / total if total else 0.0,
@@ -244,5 +340,135 @@ def recompute(req: RecomputeRequest):
         f"&w={quote(w_json)}"
     )
     return RecomputeResult(
-        tile_url=tile_url, value_max=value_max, regional_value=rv, metrics=metrics
+        tile_url=tile_url, value_max=value_max, regional_value=rv, metrics=metrics,
+        peak_threshold=peak_threshold,
     )
+
+
+# Точки-пики для линий концентрации (ТЗ п.5): те же взвешенные значения
+# ячеек, что _AGG_SQL, но дальше кластеризуем смежные ячейки-пики через
+# ST_ClusterDBSCAN(eps=1) — единица измерения после ST_Transform(...,3857)
+# это метры, eps=1 метр means "физически соприкасаются" (у полигонов ячеек,
+# делящих общую границу, расстояние между геометриями = 0) — это ТОЧНАЯ
+# проверка смежности, а не произвольный порог расстояния, поэтому eps здесь
+# не вынесен в параметр (в отличие от sigma_km/beta ниже — те действительно
+# требуют эмпирического подбора). DISTINCT ON (cid) ... ORDER BY raw DESC
+# берёт ячейку с максимальным значением в каждом кластере как точку-пик —
+# не центроид кластера, см. обоснование в composition.cluster_peaks.
+_PEAK_POINTS_SQL = text("""
+    WITH wt AS (
+        SELECT m.id AS mask_id, (e.value)::double precision AS w
+        FROM json_each_text(CAST(:w AS json)) e JOIN mask m ON m.slug = e.key
+        WHERE (e.value)::double precision <> 0
+    ),
+    cell AS (
+        SELECT mcv.cell_id, sum(wt.w * mcv.weight) AS raw, gc.geom
+        FROM mask_cell_value mcv
+        JOIN wt ON wt.mask_id = mcv.mask_id
+        JOIN grid_cell gc ON gc.id = mcv.cell_id
+        WHERE gc.region_id = :r AND mcv.indicator_code IN ('', :i)
+        GROUP BY mcv.cell_id, gc.geom
+    ),
+    thr AS (
+        SELECT percentile_cont(1 - :frac) WITHIN GROUP (ORDER BY raw) AS t FROM cell
+    ),
+    peak_cells AS (
+        SELECT c.cell_id, c.raw, c.geom
+        FROM cell c CROSS JOIN thr
+        WHERE c.raw >= thr.t
+    ),
+    clustered AS (
+        SELECT cell_id, raw, geom,
+               ST_ClusterDBSCAN(ST_Transform(geom, 3857), eps := 1, minpoints := 1)
+                   OVER () AS cid
+        FROM peak_cells
+    )
+    SELECT DISTINCT ON (cid)
+           ST_X(ST_Centroid(geom)) AS lon, ST_Y(ST_Centroid(geom)) AS lat, raw
+    FROM clustered
+    ORDER BY cid, raw DESC
+""")
+
+
+@app.get("/api/concentration-structure")
+def concentration_structure(
+    region_id: int = Query(...),
+    indicator: str = Query(...),
+    weights: str = Query(..., description="JSON slug->вес, тот же формат, что POST /api/recompute"),
+    peak_frac: float = Query(0.10, ge=0.01, le=0.5, description="ТЗ п.4: топ 10% по умолчанию"),
+    decay_sigma_km: float = Query(10.0, gt=0, description="см. composition.decay_from_structure"),
+):
+    """
+    Линии концентрации между пиками (ТЗ п.5) — GeoJSON FeatureCollection:
+    Point-фичи для точек-пиков, LineString-фичи для рёбер MST между ними.
+
+    MST считается в Python (scipy), не в SQL — для типичного числа пиков
+    (единицы-десятки после кластеризации) это тривиально быстро, а
+    реализация MST на чистом SQL сложнее и не даёт выгоды на таком объёме.
+
+    decay_sigma_km возвращается в ответе как есть (не применяется здесь к
+    per-cell values) — сам per-cell расчёт (composition.decay_from_structure)
+    требует либо офлайн-прогона (ETL/run_pipeline), либо правки SQL-функции
+    tile_composition для Martin, которая рисует сами тайлы суммарного слоя —
+    её исходник вне зоны этого API-файла, встраивать вслепую не стал.
+    Здесь эндпоинт даёт пики+линии для реальной отрисовки и параметр sigma
+    для визуальной прикидки (см. фронт — кольца затухания вокруг пиков).
+    """
+    try:
+        weights_dict = {k: v for k, v in json.loads(weights).items() if v}
+    except (json.JSONDecodeError, AttributeError):
+        raise HTTPException(400, "weights должен быть JSON-объектом slug->вес")
+    if not weights_dict:
+        raise HTTPException(400, "Задайте хотя бы один ненулевой вес")
+    w_json = json.dumps(weights_dict, ensure_ascii=False)
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            _PEAK_POINTS_SQL, {"w": w_json, "r": region_id, "i": indicator, "frac": peak_frac}
+        ).mappings().all()
+
+    if not rows:
+        raise HTTPException(404, "Нет данных для построения пиков")
+
+    points = [(float(r["lon"]), float(r["lat"]), float(r["raw"])) for r in rows]
+    features = [
+        {
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [lon, lat]},
+            "properties": {"value": raw, "kind": "peak"},
+        }
+        for lon, lat, raw in points
+    ]
+
+    if len(points) > 1:
+        import numpy as np
+        from scipy.sparse.csgraph import minimum_spanning_tree
+        from scipy.spatial.distance import cdist
+
+        # плоское приближение градусов в метры для построения MST (не для
+        # итоговых метрических расстояний) — точнее делать через ST_Transform
+        # в SQL, но для топологии дерева на масштабе одного региона (десятки-
+        # сотни км) этой точности достаточно, и не нужен второй SQL-запрос
+        lat0 = sum(p[1] for p in points) / len(points)
+        coords_m = np.array([
+            ((lon - points[0][0]) * 111320 * np.cos(np.radians(lat0)),
+             (lat - points[0][1]) * 110540)
+            for lon, lat, _ in points
+        ])
+        mst = minimum_spanning_tree(cdist(coords_m, coords_m)).toarray()
+        for i in range(len(points)):
+            for j in range(len(points)):
+                if mst[i, j] > 0:
+                    features.append({
+                        "type": "Feature",
+                        "geometry": {
+                            "type": "LineString",
+                            "coordinates": [
+                                [points[i][0], points[i][1]],
+                                [points[j][0], points[j][1]],
+                            ],
+                        },
+                        "properties": {"kind": "concentration_line"},
+                    })
+
+    return {"type": "FeatureCollection", "features": features, "decay_sigma_km": decay_sigma_km}

@@ -15,18 +15,48 @@ html, body, #root {
   color: var(--text);
 }
 
-.app { display: flex; height: 100%; }
+.app { position: relative; height: 100%; }
 
-#map { flex: 1; height: 100%; }
+#map { position: absolute; inset: 0; }
 
+/* Плавающая карточка вместо edge-to-edge сайдбара (паттерн Google Maps: левая
+   панель — карточка с отступом от края и тенью, а не прижата вплотную). */
 .panel {
+  position: absolute;
+  top: 16px; left: 16px; bottom: 16px;
   width: 340px;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0,0,0,.14);
+  overflow: visible; /* .panel-toggle выступает за край — не обрезаем */
+  transition: width .22s ease;
+  z-index: 5;
+}
+.panel.collapsed { width: 0; border-color: transparent; box-shadow: none; }
+
+.panel-body {
   height: 100%;
   overflow-y: auto;
-  background: var(--panel-bg);
-  border-right: 1px solid var(--panel-border);
   padding: 16px;
 }
+
+.panel-toggle {
+  position: absolute;
+  top: 14px;
+  right: -14px;
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid var(--panel-border);
+  box-shadow: 0 1px 4px rgba(0,0,0,.18);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--accent);
+  z-index: 6;
+}
+.panel-toggle:hover { background: #f2f6fb; }
 
 .panel h1 { font-size: 16px; margin: 0 0 4px; }
 .panel .sub { font-size: 12px; color: var(--muted); margin-bottom: 16px; }
@@ -68,11 +98,62 @@ select { width: 100%; padding: 7px; border: 1px solid var(--panel-border); borde
 .metrics td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
 .ok { color: #167c3c; } .bad { color: #b00020; }
 
-.locator { position: absolute; bottom: 20px; left: 360px; width: 230px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 8px; padding: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.1); }
+/* Кнопка-иконка "слои" (аналог стопки слоёв Google Maps), под контролами зума
+   карты (NavigationControl уже занимает верхний правый угол выше). */
+.layers-toggle {
+  position: absolute;
+  top: 90px; right: 20px;
+  width: 36px; height: 36px;
+  border-radius: 8px;
+  background: #fff;
+  border: 1px solid var(--panel-border);
+  box-shadow: 0 1px 4px rgba(0,0,0,.18);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--accent);
+  cursor: pointer;
+  z-index: 5;
+}
+.layers-toggle:hover { background: #f2f6fb; }
+
+.layers-panel {
+  position: absolute;
+  top: 90px; right: 66px;
+  width: 300px;
+  max-height: calc(100% - 120px);
+  overflow-y: auto;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  box-shadow: 0 4px 20px rgba(0,0,0,.14);
+  padding: 14px;
+  z-index: 5;
+}
+.layers-panel-head {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 13px; font-weight: 600; margin-bottom: 10px;
+}
+.layers-panel-head .close { cursor: pointer; color: var(--muted); font-size: 13px; }
+.layers-panel .section:last-child { margin-bottom: 0; }
+
+/* left задаётся инлайном из App.jsx (ширина панели измеряется ResizeObserver'ом,
+   а не захардкожена — при сворачивании панели или другом разрешении локатор
+   не наедет на панель и не улетит в пустоту). */
+.locator {
+  position: absolute;
+  bottom: 20px;
+  width: 230px;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.1);
+  transition: left .22s ease;
+  z-index: 4;
+}
 .locator-title { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
 .locator-map { width: 100%; height: 150px; border-radius: 5px; overflow: hidden; }
 .locator-map .maplibregl-ctrl-attrib { display: none; }
 
-.legend { position: absolute; bottom: 20px; right: 20px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 8px; padding: 10px 12px; font-size: 11px; box-shadow: 0 2px 8px rgba(0,0,0,.1); }
+.legend { position: absolute; bottom: 20px; right: 20px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 8px; padding: 10px 12px; font-size: 11px; box-shadow: 0 2px 8px rgba(0,0,0,.1); z-index: 4; }
 .legend .bar { height: 10px; width: 160px; border-radius: 3px; margin: 4px 0; }
 .legend .ends { display: flex; justify-content: space-between; color: var(--muted); }
