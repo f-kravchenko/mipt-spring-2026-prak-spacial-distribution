@@ -1,0 +1,50 @@
+# Конфиг маски типа территории (§5.5).
+#
+# Балл — пригодность класса землепользования для хоз. деятельности (0..1).
+# Один источник правды и для оффлайн-расчёта (scripts/compute_territory.py,
+# venv с osmnx), и для описания маски в рантайме (src/masks/territory.py,
+# slim-образ без osmnx). Чтобы поменять веса или добавить класс — правь
+# только этот файл, код трогать не нужно.
+#
+# tags.landuse / tags.natural / tags.aeroway — значения одноимённых OSM-тегов,
+# которые относятся к данному классу (см. https://wiki.openstreetmap.org/wiki/Landuse).
+
+classes:
+  - key: industrial
+    label: "промзона"
+    score: 1.00
+    tags:
+      landuse: [industrial]
+
+  - key: transport
+    label: "транспорт"
+    score: 0.80
+    tags:
+      landuse: [railway]
+      aeroway: [aerodrome]
+
+  - key: urban
+    label: "город"
+    score: 0.70
+    tags:
+      landuse: [residential, commercial, retail]
+
+  - key: farmland
+    label: "поле"
+    score: 0.35
+    tags:
+      landuse: [farmland, meadow, orchard, vineyard]
+
+  - key: forest
+    label: "лес"
+    score: 0.10
+    tags:
+      landuse: [forest]
+      natural: [wood]
+
+  - key: water
+    label: "вода"
+    score: 0.00
+    tags:
+      landuse: [reservoir, basin]
+      natural: [water]

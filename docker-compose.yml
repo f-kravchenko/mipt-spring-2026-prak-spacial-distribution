@@ -31,7 +31,9 @@ services:
       - "${MARTIN_PORT:-3000}:3000"
 
   api:
-    build: ./apps/api
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
     depends_on:
       db:
         condition: service_healthy

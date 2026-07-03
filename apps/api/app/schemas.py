@@ -65,3 +65,9 @@ class RecomputeResult(BaseModel):
     value_max: float | None = None
     regional_value: float | None = None
     metrics: dict[str, float]
+    # Порог "пика" на суммарном слое (top 5% ячеек, см. §9 "пики на суммарном
+    # слое" / composition.detect_peaks(method="percentile", top_frac=0.05)).
+    # Уже в единицах распределения (масштабирован тем же rv/total, что и
+    # value_max) — фронт сравнивает ["get","value"] >= peak_threshold в
+    # MapLibre-выражении, отдельно считать пики на фронте не нужно.
+    peak_threshold: float | None = None
