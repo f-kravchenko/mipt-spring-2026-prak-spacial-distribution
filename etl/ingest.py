@@ -226,26 +226,32 @@ def load_road_network_mask(engine, region_id, mask_id):
     Возвращает число загруженных ячеек (0, если у региона нет дорог)."""
     tiers = road_network.ROAD_TIERS
     # d_<tier> — км до ближайшей дороги класса; пусто -> большое расстояние (вес ~0).
+    # Для 1 км ячеек считаем доступность от внутренней точки ячейки: это заметно
+    # дешевле polygon->geography distance и достаточно точно для аналитической маски.
     # regex-предикат подставляется ЛИТЕРАЛОМ (а не bind-параметром), чтобы планер
-    # использовал частичный GiST-индекс road_geom_*_gix (см. 0005); иначе KNN
-    # сканирует все дороги с фильтром — на Краснодаре это десятки минут.
+    # использовал частичный composite GiST-индекс road_region_geom_*_gix (см. 0005);
+    # иначе KNN превращается в bitmap scan + сортировку дорог для каждой ячейки.
     # Паттерны — доверенные константы из ROAD_TIERS, инъекции нет.
     dist_cols = ",\n".join(
-        f"""COALESCE((SELECT ST_Distance(gc.geom::geography, r.geom::geography)
+        f"""COALESCE((SELECT ST_DistanceSphere(c.pt, r.geom)
                       FROM road r
                       WHERE r.region_id = :rid AND r.highway ~ '{spec[0]}'
-                      ORDER BY gc.geom <-> r.geom LIMIT 1), 1e9) / 1000.0 AS d_{t}"""
+                      ORDER BY c.pt <-> r.geom LIMIT 1), 1e9) / 1000.0 AS d_{t}"""
         for t, spec in tiers.items()
     )
     score = " + ".join(
         f"{w}*exp(-d_{t}/{sigma})" for t, (_re, sigma, w) in tiers.items()
     )
     sql = text(f"""
-        WITH d AS (
-            SELECT gc.id AS cell_id,
-                {dist_cols}
+        WITH cells AS (
+            SELECT gc.id AS cell_id, ST_PointOnSurface(gc.geom) AS pt
             FROM grid_cell gc
             WHERE gc.region_id = :rid
+        ),
+        d AS (
+            SELECT c.cell_id,
+                {dist_cols}
+            FROM cells c
         ),
         w AS (SELECT cell_id, ({score}) AS raw FROM d)
         INSERT INTO mask_cell_value (mask_id, indicator_code, cell_id, weight)
@@ -254,6 +260,17 @@ def load_road_network_mask(engine, region_id, mask_id):
     """)
     params = {'rid': region_id, 'mid': mask_id}
     with engine.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS btree_gist"))
+        for old_index in ('road_geom_fed_gix', 'road_geom_reg_gix', 'road_geom_loc_gix'):
+            conn.execute(text(f"DROP INDEX IF EXISTS {old_index}"))
+        for tier, (pattern, _sigma, _weight) in tiers.items():
+            suffix = {'federal': 'fed', 'regional': 'reg', 'local': 'loc'}[tier]
+            conn.execute(text(f"""
+                CREATE INDEX IF NOT EXISTS road_region_geom_{suffix}_gix
+                ON road USING gist (region_id, geom)
+                WHERE highway ~ '{pattern}'
+            """))
+        conn.execute(text("ANALYZE road"))
         conn.execute(text("""
             DELETE FROM mask_cell_value
             WHERE mask_id = :mid

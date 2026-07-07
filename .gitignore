@@ -14,3 +14,4 @@ data/processed/*.tif
 node_modules/
 apps/web/dist/
 .env
+.env.prod

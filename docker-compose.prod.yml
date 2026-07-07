@@ -1,0 +1,109 @@
+name: mipt-deaggr
+
+services:
+  db:
+    image: ${POSTGIS_IMAGE:-postgis/postgis:16-3.4}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-masks}
+      POSTGRES_USER: ${POSTGRES_USER:-masks}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.prod}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/helm/spatial-masks/files/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-masks} -d ${POSTGRES_DB:-masks}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    image: ${POSTGIS_IMAGE:-postgis/postgis:16-3.4}
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGDATABASE: ${POSTGRES_DB:-masks}
+      PGUSER: ${POSTGRES_USER:-masks}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.prod}
+    volumes:
+      - ./deploy/helm/spatial-masks/files/migrations:/migrations:ro
+    command:
+      - sh
+      - -ec
+      - |
+        for f in /migrations/*.sql; do
+          echo "applying $${f}"
+          psql -v ON_ERROR_STOP=1 -f "$${f}"
+        done
+
+  tiles:
+    image: ghcr.io/maplibre/martin:v0.13.0
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-masks}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.prod}@db:5432/${POSTGRES_DB:-masks}
+    expose:
+      - "3000"
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-masks}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.prod}@db:5432/${POSTGRES_DB:-masks}
+      TILES_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL in .env.prod}/tiles
+    expose:
+      - "8000"
+
+  web:
+    build: ./apps/web
+    restart: unless-stopped
+    depends_on:
+      - api
+      - tiles
+    expose:
+      - "80"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - web
+      - api
+      - tiles
+    environment:
+      SITE_HOST: ${SITE_HOST:-:80}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/vds/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  etl:
+    profiles: ["tools"]
+    build:
+      context: .
+      dockerfile: Dockerfile.etl
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-masks}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.prod}@db:5432/${POSTGRES_DB:-masks}
+    volumes:
+      - ./data:/app/data:ro
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
