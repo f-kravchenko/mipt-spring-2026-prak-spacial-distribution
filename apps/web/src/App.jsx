@@ -37,7 +37,10 @@ const FALLBACK_AUTO_WEIGHTS = {
 
 // Цветовые шкалы
 const MASK_C0 = "#f7fbff", MASK_C1 = "#08306b"; // синяя: вес маски 0..1
-const DIST_C0 = "#fff5eb", DIST_C1 = "#7f2704"; // оранжевая: значение распределения
+// Тепловая шкала распределения: синий (мало) -> красный (много). Прямая
+// интерполяция синий->красный проходит через грязно-фиолетовый, поэтому
+// многоступенчатая рампа (ColorBrewer RdYlBu, перевёрнутая).
+const DIST_STOPS = ["#4575b4", "#91bfdb", "#ffffbf", "#fc8d59", "#d73027"];
 
 // Self-contained подложка: пустой фон. Без внешних тайлов (demotiles и т.п.).
 const BASE_STYLE = {
@@ -54,8 +57,13 @@ const WEIGHT_DEBOUNCE_MS = 400;
 
 function fmt(x) {
   if (x == null) return "—";
-  if (Math.abs(x) >= 1000) return x.toLocaleString("ru-RU", { maximumFractionDigits: 0 });
-  return x.toLocaleString("ru-RU", { maximumFractionDigits: 3 });
+  const a = Math.abs(x);
+  if (a >= 1000) return x.toLocaleString("ru-RU", { maximumFractionDigits: 0 });
+  if (a >= 1 || a === 0) return x.toLocaleString("ru-RU", { maximumFractionDigits: 3 });
+  // < 1: три ЗНАЧАЩИХ цифры, не три знака после запятой — иначе малые
+  // значения ячеек (0.0004 млн руб.) округляются в "0"
+  if (a < 1e-6) return x.toExponential(2).replace(".", ",");
+  return x.toLocaleString("ru-RU", { maximumSignificantDigits: 3 });
 }
 
 // Расширенные границы bbox (для maxBounds — немного контекста вокруг региона).
@@ -326,7 +334,8 @@ export default function App() {
     addOrdered(map, ranks, {
       id: "dist-fill", type: "fill", source: "dist", "source-layer": "distribution",
       paint: {
-        "fill-color": ["interpolate", ["linear"], ["get", "value"], 0, DIST_C0, vmax, DIST_C1],
+        "fill-color": ["interpolate", ["linear"], ["get", "value"],
+          ...DIST_STOPS.flatMap((c, i) => [vmax * i / (DIST_STOPS.length - 1), c])],
         "fill-opacity": 0.85,
       },
     }, RANK.dist);
@@ -706,7 +715,7 @@ export default function App() {
       {active && (
         <div className="legend">
           <div>Распределение, {active.value_max != null ? `до ${fmt(active.value_max)}/ячейку` : ""}</div>
-          <div className="bar" style={{ background: `linear-gradient(90deg, ${DIST_C0}, ${DIST_C1})` }} />
+          <div className="bar" style={{ background: `linear-gradient(90deg, ${DIST_STOPS.join(", ")})` }} />
           <div className="ends"><span>0</span><span>{fmt(active.value_max)}</span></div>
         </div>
       )}

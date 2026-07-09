@@ -160,6 +160,7 @@ def mask_peaks(
         JOIN mask m ON m.id = mcv.mask_id
         WHERE gc.region_id = :r AND m.slug = :slug
           AND mcv.indicator_code IN ('', COALESCE(:i, ''))
+          AND mcv.weight > 0  -- порог по ненулевым, см. _PEAK_POINTS_SQL
     """)
     with engine.connect() as conn:
         row = conn.execute(
@@ -266,7 +267,7 @@ _RV_SQL = text("""
 """)
 
 # Взвешенная сумма масок по ячейкам + агрегаты для нормировки и метрик.
-# peak.p95 — 95-й перцентиль raw по ячейкам региона (top 5%, тот же top_frac,
+# peak.p95 — 95-й перцентиль raw по ненулевым ячейкам региона (top 5%, тот же top_frac,
 # что дефолт composition.detect_peaks(method="percentile")) — используется
 # ниже, чтобы посчитать peak_threshold в тех же единицах, что value_max.
 _AGG_SQL = text("""
@@ -296,7 +297,9 @@ _AGG_SQL = text("""
         ) z
     ),
     peak AS (
-        SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY raw) AS p95 FROM cell
+        -- по ненулевым ячейкам — см. комментарий в _PEAK_POINTS_SQL
+        SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY raw) AS p95
+        FROM cell WHERE raw > 0
     )
     SELECT a.n AS n, a.s AS total, a.mx AS rawmax, g.g AS gini, top.t10 AS t10,
            peak.p95 AS p95
@@ -370,7 +373,11 @@ _PEAK_POINTS_SQL = text("""
         GROUP BY mcv.cell_id, gc.geom
     ),
     thr AS (
-        SELECT percentile_cont(1 - :frac) WITHIN GROUP (ORDER BY raw) AS t FROM cell
+        -- Порог только по ненулевым ячейкам: в разреженном регионе перцентиль
+        -- по всем ячейкам схлопывается в 0, и "пиком" становится любая
+        -- ненулевая ячейка в окружении нулей. threshold > 0 по построению.
+        SELECT percentile_cont(1 - :frac) WITHIN GROUP (ORDER BY raw) AS t
+        FROM cell WHERE raw > 0
     ),
     peak_cells AS (
         SELECT c.cell_id, c.raw, c.geom
@@ -382,11 +389,19 @@ _PEAK_POINTS_SQL = text("""
                ST_ClusterDBSCAN(ST_Transform(geom, 3857), eps := 1, minpoints := 1)
                    OVER () AS cid
         FROM peak_cells
+    ),
+    -- Топ-K кластеров по суммарной массе (sum(raw)): в плотном регионе
+    -- топ-10% ячеек дают сотни кластеров (Подмосковье — 400+), карта
+    -- нечитаема. Масса, а не максимум, — чтобы крупный центр концентрации
+    -- (много сильных ячеек) выигрывал у одиночной яркой ячейки.
+    strongest AS (
+        SELECT cid FROM clustered
+        GROUP BY cid ORDER BY sum(raw) DESC LIMIT :maxp
     )
-    SELECT DISTINCT ON (cid)
-           ST_X(ST_Centroid(geom)) AS lon, ST_Y(ST_Centroid(geom)) AS lat, raw
-    FROM clustered
-    ORDER BY cid, raw DESC
+    SELECT DISTINCT ON (c.cid)
+           ST_X(ST_Centroid(c.geom)) AS lon, ST_Y(ST_Centroid(c.geom)) AS lat, c.raw
+    FROM clustered c JOIN strongest s USING (cid)
+    ORDER BY c.cid, c.raw DESC
 """)
 
 
@@ -396,6 +411,7 @@ def concentration_structure(
     indicator: str = Query(...),
     weights: str = Query(..., description="JSON slug->вес, тот же формат, что POST /api/recompute"),
     peak_frac: float = Query(0.10, ge=0.01, le=0.5, description="ТЗ п.4: топ 10% по умолчанию"),
+    max_peaks: int = Query(10, ge=1, le=50, description="топ-K кластеров по массе — контроль читаемости карты"),
     decay_sigma_km: float = Query(10.0, gt=0, description="см. composition.decay_from_structure"),
 ):
     """
@@ -424,7 +440,8 @@ def concentration_structure(
 
     with engine.connect() as conn:
         rows = conn.execute(
-            _PEAK_POINTS_SQL, {"w": w_json, "r": region_id, "i": indicator, "frac": peak_frac}
+            _PEAK_POINTS_SQL,
+            {"w": w_json, "r": region_id, "i": indicator, "frac": peak_frac, "maxp": max_peaks}
         ).mappings().all()
 
     if not rows:

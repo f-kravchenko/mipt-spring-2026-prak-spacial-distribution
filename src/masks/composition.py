@@ -126,15 +126,21 @@ def detect_peaks(composed, method="percentile", top_frac=0.05, z_thresh=2.0, nei
     """
     Выделение пиков на суммарном (скомпонованном) слое.
 
+    Порог перцентиля считается только по НЕНУЛЕВЫМ ячейкам: в разреженном
+    регионе, где нулей больше (1 - top_frac), перцентиль по всем ячейкам
+    схлопывается в 0 — и "пиком" становится любая ненулевая ячейка в
+    окружении нулей, т.е. критерий вырождается в шум. Нулевая ячейка пиком
+    быть не может.
+
     Параметры:
         composed: numpy array итоговых весов после composition
                   (выход weighted_sum_composition / multiplicative_gating /
                   entropy_smoothing).
         method:
             "percentile" (по умолчанию) — top_frac (по умолчанию верхние 5%)
-                ячеек по значению. Не требует данных о соседстве ячеек,
-                работает всегда, но на почти однородном фоне может выделить
-                ячейки, которые не являются содержательным "пиком" —
+                ненулевых ячеек по значению. Не требует данных о соседстве
+                ячеек, работает всегда, но на почти однородном фоне может
+                выделить ячейки, которые не являются содержательным "пиком" —
                 просто оказались чуть выше остальных в плоском распределении.
             "zscore" — ячейки с (value - mean) / std >= z_thresh: статистический
                 выброс относительно распределения по региону. Устойчивее
@@ -149,7 +155,7 @@ def detect_peaks(composed, method="percentile", top_frac=0.05, z_thresh=2.0, nei
                 libpysal.weights.Queen.from_dataframe(grid).neighbors) —
                 этой информации в composition.py нет по умолчанию, её должен
                 передать вызывающий код (он строил grid).
-        top_frac: доля ячеек для method="percentile" (0-1).
+        top_frac: доля ненулевых ячеек для method="percentile" (0-1).
         z_thresh: порог z-оценки для method="zscore"/"local_max".
         neighbors: dict {index: list[index]} — соседние ячейки по сетке.
                    Обязателен для method="local_max".
@@ -163,8 +169,13 @@ def detect_peaks(composed, method="percentile", top_frac=0.05, z_thresh=2.0, nei
         return np.zeros(0, dtype=bool)
 
     if method == "percentile":
-        k = max(1, int(round(n * top_frac)))
-        threshold = np.sort(composed)[::-1][k - 1]
+        positive = composed[composed > 0]
+        if positive.size == 0:
+            # все ячейки нулевые — пиков нет
+            return np.zeros(n, dtype=bool)
+        k = max(1, int(round(positive.size * top_frac)))
+        threshold = np.sort(positive)[::-1][k - 1]
+        # threshold > 0 по построению — нулевые ячейки не проходят
         return composed >= threshold
 
     std = composed.std()
@@ -193,7 +204,7 @@ def detect_peaks(composed, method="percentile", top_frac=0.05, z_thresh=2.0, nei
     raise ValueError(f"Неизвестный method для detect_peaks: {method}")
 
 
-def cluster_peaks(peak_mask, neighbors, values):
+def cluster_peaks(peak_mask, neighbors, values, max_peaks=10):
     """
     Группирует ячейки-пики (detect_peaks) в кластеры смежности (BFS по
     neighbors — тот же формат {index: [соседние индексы]}, что в
@@ -203,10 +214,18 @@ def cluster_peaks(peak_mask, neighbors, values):
     попасть в ячейку с низким значением — например, подковообразный кластер
     вокруг реки/леса).
 
+    Оставляются только max_peaks кластеров с наибольшей суммарной массой
+    (sum значений ячеек кластера): в плотном регионе топ-N% ячеек дают сотни
+    кластеров (Подмосковье — 400+ на worldpop), карта нечитаема. Масса, а не
+    максимум, — чтобы крупный центр концентрации (много сильных ячеек)
+    выигрывал у одиночной яркой ячейки. То же правило в SQL-пути API
+    (_PEAK_POINTS_SQL в apps/api/app/main.py).
+
     Параметры:
         peak_mask: (N,) bool — выход detect_peaks
         neighbors: dict {index: list[index]} — соседство ячеек по сетке
         values: (N,) numpy array — значения (обычно composed)
+        max_peaks: сколько сильнейших кластеров оставить (None — все)
 
     Возвращает:
         list[int] — индексы ячеек-представителей, по одной на кластер
@@ -214,7 +233,7 @@ def cluster_peaks(peak_mask, neighbors, values):
     peak_idx = np.flatnonzero(peak_mask)
     peak_set = set(peak_idx.tolist())
     visited = set()
-    reps = []
+    clusters = []
     for i in peak_idx:
         i = int(i)
         if i in visited:
@@ -228,8 +247,10 @@ def cluster_peaks(peak_mask, neighbors, values):
                 if nb in peak_set and nb not in visited:
                     visited.add(nb)
                     stack.append(nb)
-        reps.append(max(component, key=lambda k: values[k]))
-    return reps
+        clusters.append(component)
+    if max_peaks is not None:
+        clusters = sorted(clusters, key=lambda c: -values[c].sum())[:max_peaks]
+    return [max(c, key=lambda k: values[k]) for c in clusters]
 
 
 def build_concentration_lines(peak_coords):
@@ -373,8 +394,8 @@ COMPOSITION_DESCRIPTION = {
         {
             "name": "detect_peaks",
             "description": "Выделение пиков на суммарном слое: percentile (топ N% "
-                           "по значению), zscore (статистический выброс) или "
-                           "local_max (истинный локальный максимум по соседям)",
+                           "ненулевых ячеек по значению), zscore (статистический "
+                           "выброс) или local_max (локальный максимум по соседям)",
             "use_case": "Подсветка хотспотов на карте композиции — отдельным слоем "
                         "поверх непрерывной заливки, чтобы пики не терялись в общей "
                         "палитре"
