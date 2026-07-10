@@ -204,7 +204,7 @@ def detect_peaks(composed, method="percentile", top_frac=0.05, z_thresh=2.0, nei
     raise ValueError(f"Неизвестный method для detect_peaks: {method}")
 
 
-def cluster_peaks(peak_mask, neighbors, values, max_peaks=10):
+def cluster_peaks(peak_mask, neighbors, values, mass_share=0.90):
     """
     Группирует ячейки-пики (detect_peaks) в кластеры смежности (BFS по
     neighbors — тот же формат {index: [соседние индексы]}, что в
@@ -214,18 +214,21 @@ def cluster_peaks(peak_mask, neighbors, values, max_peaks=10):
     попасть в ячейку с низким значением — например, подковообразный кластер
     вокруг реки/леса).
 
-    Оставляются только max_peaks кластеров с наибольшей суммарной массой
-    (sum значений ячеек кластера): в плотном регионе топ-N% ячеек дают сотни
-    кластеров (Подмосковье — 400+ на worldpop), карта нечитаема. Масса, а не
-    максимум, — чтобы крупный центр концентрации (много сильных ячеек)
-    выигрывал у одиночной яркой ячейки. То же правило в SQL-пути API
-    (_PEAK_POINTS_SQL в apps/api/app/main.py).
+    Правило Парето: оставляются сильнейшие кластеры, суммарно накрывающие
+    mass_share массы пиковых ячеек (масса кластера — sum значений его ячеек,
+    чтобы крупный центр из многих сильных ячеек выигрывал у одиночной яркой).
+    В отличие от фиксированного топ-K число пиков адаптируется к структуре
+    концентрации (моноцентричный регион — единицы, полицентричный — десятки)
+    и не зависит от масштаба карты: при переходе регион->страна отбор везде
+    идёт по одной доле массы — общий "уровень моря" без перекоса высот.
+    Кластер, пересекающий границу share, включается. То же правило в
+    SQL-пути API (_PEAK_POINTS_SQL в apps/api/app/main.py).
 
     Параметры:
         peak_mask: (N,) bool — выход detect_peaks
         neighbors: dict {index: list[index]} — соседство ячеек по сетке
         values: (N,) numpy array — значения (обычно composed)
-        max_peaks: сколько сильнейших кластеров оставить (None — все)
+        mass_share: доля массы пиков, которую накрывают кластеры (None — все)
 
     Возвращает:
         list[int] — индексы ячеек-представителей, по одной на кластер
@@ -248,8 +251,16 @@ def cluster_peaks(peak_mask, neighbors, values, max_peaks=10):
                     visited.add(nb)
                     stack.append(nb)
         clusters.append(component)
-    if max_peaks is not None:
-        clusters = sorted(clusters, key=lambda c: -values[c].sum())[:max_peaks]
+    if mass_share is not None and clusters:
+        clusters.sort(key=lambda c: -values[c].sum())
+        total = sum(values[c].sum() for c in clusters)
+        kept, acc = [], 0.0
+        for c in clusters:
+            if acc >= mass_share * total:
+                break
+            kept.append(c)
+            acc += values[c].sum()
+        clusters = kept
     return [max(c, key=lambda k: values[k]) for c in clusters]
 
 

@@ -390,13 +390,25 @@ _PEAK_POINTS_SQL = text("""
                    OVER () AS cid
         FROM peak_cells
     ),
-    -- Топ-K кластеров по суммарной массе (sum(raw)): в плотном регионе
-    -- топ-10% ячеек дают сотни кластеров (Подмосковье — 400+), карта
-    -- нечитаема. Масса, а не максимум, — чтобы крупный центр концентрации
-    -- (много сильных ячеек) выигрывал у одиночной яркой ячейки.
+    -- Правило Парето вместо фиксированного топ-K: сильнейшие кластеры,
+    -- суммарно накрывающие :share массы пиковых ячеек (масса кластера —
+    -- sum(raw), чтобы крупный центр из многих сильных ячеек выигрывал у
+    -- одиночной яркой). Число пиков адаптируется к структуре концентрации
+    -- (моноцентричная Якутия — 3, полицентричное Подмосковье — ~60 на
+    -- worldpop) и не зависит от масштаба карты: при переходе регион->страна
+    -- отбор везде идёт по одной доле массы — общий "уровень моря" без
+    -- перекоса высот. Кластер, пересекающий границу share, включается.
+    mass AS (
+        SELECT cid, sum(raw) AS m FROM clustered GROUP BY cid
+    ),
     strongest AS (
-        SELECT cid FROM clustered
-        GROUP BY cid ORDER BY sum(raw) DESC LIMIT :maxp
+        SELECT cid FROM (
+            SELECT cid,
+                   sum(m) OVER (ORDER BY m DESC, cid) - m AS mass_before,
+                   sum(m) OVER () AS total
+            FROM mass
+        ) z
+        WHERE mass_before < :share * total
     )
     SELECT DISTINCT ON (c.cid)
            ST_X(ST_Centroid(c.geom)) AS lon, ST_Y(ST_Centroid(c.geom)) AS lat, c.raw
@@ -411,7 +423,7 @@ def concentration_structure(
     indicator: str = Query(...),
     weights: str = Query(..., description="JSON slug->вес, тот же формат, что POST /api/recompute"),
     peak_frac: float = Query(0.10, ge=0.01, le=0.5, description="ТЗ п.4: топ 10% по умолчанию"),
-    max_peaks: int = Query(10, ge=1, le=50, description="топ-K кластеров по массе — контроль читаемости карты"),
+    peak_mass_share: float = Query(0.90, ge=0.5, le=0.99, description="Парето: оставить кластеры, накрывающие эту долю массы пиков"),
     decay_sigma_km: float = Query(10.0, gt=0, description="см. composition.decay_from_structure"),
 ):
     """
@@ -441,7 +453,8 @@ def concentration_structure(
     with engine.connect() as conn:
         rows = conn.execute(
             _PEAK_POINTS_SQL,
-            {"w": w_json, "r": region_id, "i": indicator, "frac": peak_frac, "maxp": max_peaks}
+            {"w": w_json, "r": region_id, "i": indicator, "frac": peak_frac,
+             "share": peak_mass_share}
         ).mappings().all()
 
     if not rows:
