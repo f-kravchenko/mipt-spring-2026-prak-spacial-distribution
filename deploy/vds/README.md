@@ -100,7 +100,26 @@ http://YOUR_SERVER_IP
 
 or your HTTPS domain.
 
-## Updates
+## Automatic updates
+
+The VDS can poll the controlled `main` branch and deploy new commits without
+manual SSH commands. Install the timer once on the server:
+
+```bash
+./deploy/vds/install-auto-deploy.sh
+```
+
+It checks GitHub every five minutes. The timer only deploys application and
+infrastructure changes; ETL remains a separate manual operation.
+
+Check the timer and recent deployment logs:
+
+```bash
+systemctl status mipt-deaggr-auto-deploy.timer
+journalctl -u mipt-deaggr-auto-deploy.service -n 100 --no-pager
+```
+
+## Manual updates
 
 For normal code updates:
 

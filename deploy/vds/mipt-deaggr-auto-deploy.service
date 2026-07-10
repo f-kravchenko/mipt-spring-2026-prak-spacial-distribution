@@ -1,0 +1,11 @@
+[Unit]
+Description=Deploy mipt-deaggr when the production branch changes
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/mipt-deaggr/app
+ExecStart=/opt/mipt-deaggr/app/deploy/vds/auto-deploy.sh

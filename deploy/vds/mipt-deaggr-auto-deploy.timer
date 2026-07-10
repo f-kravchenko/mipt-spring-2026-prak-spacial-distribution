@@ -1,0 +1,11 @@
+[Unit]
+Description=Poll mipt-deaggr production branch for deployments
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=mipt-deaggr-auto-deploy.service
+
+[Install]
+WantedBy=timers.target
