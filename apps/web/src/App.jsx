@@ -144,6 +144,13 @@ export default function App() {
   const decayDebounceRef = useRef(null);
   useEffect(() => () => clearTimeout(decayDebounceRef.current), []);
 
+  // Правило Парето для пиков концентрации: доля массы пиковых ячеек, которую
+  // накрывают сильнейшие кластеры (дефолт 0.90 — Парето-90). Живой слайдер с
+  // debounce: перезапрашивается только structure, не весь recompute.
+  const [peakShare, setPeakShare] = useState(0.90);
+  const shareDebounceRef = useRef(null);
+  useEffect(() => () => clearTimeout(shareDebounceRef.current), []);
+
   useEffect(() => {
     const el = panelRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
@@ -246,10 +253,24 @@ export default function App() {
     recompute(regionId, indicator, w)
       .then((r) => setLiveComp({ ...r, sum_preserved: true }))  // инвариант по построению
       .catch(() => setLiveComp(null));
-    fetchConcentrationStructure(regionId, indicator, w)
+    fetchConcentrationStructure(regionId, indicator, w, 0.10, 10, peakShare)
       .then(setStructure)
       .catch(() => setStructure(null));
   };
+
+  // Смена доли Парето перезапрашивает только пики/линии (не пересчёт слоя):
+  // порог отбора кластеров — свойство отображения структуры, значения ячеек
+  // от него не зависят.
+  useEffect(() => {
+    if (regionId == null || !indicator) return;
+    clearTimeout(shareDebounceRef.current);
+    shareDebounceRef.current = setTimeout(() => {
+      fetchConcentrationStructure(regionId, indicator, weights, 0.10, 10, peakShare)
+        .then(setStructure)
+        .catch(() => setStructure(null));
+    }, WEIGHT_DEBOUNCE_MS);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [peakShare]);
 
   // веса по всем маскам (отсутствующие в наборе -> 0)
   const fullWeights = (base) => Object.fromEntries(masks.map((m) => [m.slug, base[m.slug] ?? 0]));
@@ -585,6 +606,28 @@ export default function App() {
               </div>
 
               {active && active.metrics && <Metrics comp={active} />}
+            </div>
+
+            <div className="section">
+              <label>Пики концентрации (ТЗ п.4-5)</label>
+              <div className="weights">
+                <div className="wrow">
+                  <span className="wname">Парето: доля массы</span>
+                  <input type="range" min="0.5" max="0.99" step="0.01"
+                    value={peakShare}
+                    onChange={(e) => setPeakShare(Number(e.target.value))} />
+                  <span className="wval">{Math.round(peakShare * 100)}%</span>
+                </div>
+                <div className="sub" style={{ marginTop: 6, marginBottom: 0 }}>
+                  Пики — сильнейшие кластеры, вместе накрывающие эту долю массы
+                  пиковых ячеек. Число пиков подстраивается под структуру
+                  региона (моноцентричный — единицы, полицентричный — десятки),
+                  критерий одинаков для всех регионов.
+                  {structure && (
+                    <> Сейчас: {structure.features.filter((f) => f.properties.kind === "peak").length} пик(ов).</>
+                  )}
+                </div>
+              </div>
             </div>
 
             <div className="section">

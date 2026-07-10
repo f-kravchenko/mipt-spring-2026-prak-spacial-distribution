@@ -39,13 +39,15 @@ export const fetchMaskPeaks = (regionId, slug, indicator, frac = 0.05) => {
 // Линии концентрации между пиками (ТЗ п.5) + параметр модели затухания
 // (ТЗ п.6, decay_sigma_km возвращается для справки/подписи, per-cell не
 // применяется на фронте). GeoJSON FeatureCollection: Point-пики + LineString
-// рёбра MST между ними.
+// рёбра MST между ними. peakMassShare — правило Парето: оставить сильнейшие
+// кластеры, вместе накрывающие эту долю массы пиковых ячеек (см. main.py).
 export const fetchConcentrationStructure = (
-  regionId, indicator, weights, peakFrac = 0.10, decaySigmaKm = 10
+  regionId, indicator, weights, peakFrac = 0.10, decaySigmaKm = 10, peakMassShare = 0.90
 ) => {
   const params = new URLSearchParams({
     region_id: regionId, indicator, weights: JSON.stringify(weights),
     peak_frac: String(peakFrac), decay_sigma_km: String(decaySigmaKm),
+    peak_mass_share: String(peakMassShare),
   });
   return get(`/api/concentration-structure?${params.toString()}`);
 };
