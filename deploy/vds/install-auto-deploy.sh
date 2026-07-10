@@ -4,7 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SYSTEMD_DIR=/etc/systemd/system
 
-install -m 0755 "$ROOT/deploy/vds/auto-deploy.sh" /opt/mipt-deaggr/app/deploy/vds/auto-deploy.sh
+if [[ "$ROOT" != "/opt/mipt-deaggr/app" ]]; then
+  install -m 0755 "$ROOT/deploy/vds/auto-deploy.sh" /opt/mipt-deaggr/app/deploy/vds/auto-deploy.sh
+else
+  chmod 0755 "$ROOT/deploy/vds/auto-deploy.sh"
+fi
 install -m 0644 "$ROOT/deploy/vds/mipt-deaggr-auto-deploy.service" "$SYSTEMD_DIR/mipt-deaggr-auto-deploy.service"
 install -m 0644 "$ROOT/deploy/vds/mipt-deaggr-auto-deploy.timer" "$SYSTEMD_DIR/mipt-deaggr-auto-deploy.timer"
 
