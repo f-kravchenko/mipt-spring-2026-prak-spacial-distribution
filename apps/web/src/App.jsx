@@ -160,9 +160,14 @@ export default function App() {
   const [scaleMode, setScaleMode] = useState("territory");
   const [globalScale, setGlobalScale] = useState(null); // {p99, national_total}
 
+  // p99 другого показателя — не наша шкала: сбрасываем, чтобы карта не красилась
+  // по чужому домену, пока едет свежий ответ (легенда покажет "считаем…").
+  useEffect(() => { setGlobalScale(null); }, [indicator]);
+
   // Шкала РФ зависит от показателя и весов -> перезапрашивается после каждого
   // пересчёта (liveComp) в режиме "russia". liveComp меняется после setWeights,
-  // так что weights здесь всегда актуальны.
+  // так что weights здесь всегда актуальны. Полученное значение живёт в стейте
+  // и при повторном переключении Территория->Россия применяется мгновенно.
   useEffect(() => {
     if (scaleMode !== "russia" || !indicator || !liveComp) return;
     let cancelled = false;
@@ -172,6 +177,25 @@ export default function App() {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scaleMode, indicator, liveComp]);
+
+  // Домен цветовой шкалы распределения: максимум территории или фиксированный
+  // p99 по всем регионам (режим "Россия"). Считается на уровне рендера — его
+  // используют и эффект создания слоя, и эффект живой перекраски ниже.
+  const distVmax = liveComp?.value_max > 0 ? liveComp.value_max : 1;
+  const distScaleMax = scaleMode === "russia" && globalScale?.p99 > 0 ? globalScale.p99 : distVmax;
+  const distFillColor = (max) => ["interpolate", ["linear"], ["get", "value"],
+    ...DIST_STOPS.flatMap((c, i) => [max * i / (DIST_STOPS.length - 1), c])];
+
+  // Переключение Территория/Россия меняет ТОЛЬКО paint-свойство готового слоя
+  // (setPaintProperty — мгновенная перекраска уже загруженных тайлов).
+  // Пересоздавать источник нельзя: MapLibre перезагрузил бы все тайлы, и вместе
+  // с ~4 с на /api/global-scale переключатель выглядел бы "не работающим".
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady || !map.getLayer("dist-fill")) return;
+    map.setPaintProperty("dist-fill", "fill-color", distFillColor(distScaleMax));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapReady, distScaleMax]);
 
   useEffect(() => {
     const el = panelRef.current;
@@ -190,6 +214,7 @@ export default function App() {
       zoom: 2.2,
     });
     map.addControl(new maplibregl.NavigationControl());
+    window.__map = map; // отладка из консоли: getPaintProperty, queryRenderedFeatures
     map.on("load", () => setMapReady(true));
 
     // Попап по клику на город (подписей нет — в style нет glyphs, поэтому имя в попапе)
@@ -356,11 +381,6 @@ export default function App() {
     dropLayer(map, ranks, "dist-fill", "dist");
     const dist = liveComp;
     if (!dist || !dist.tile_url) return;
-    const vmax = dist.value_max && dist.value_max > 0 ? dist.value_max : 1;
-    // Домен цветовой шкалы: максимум территории или фиксированный p99 по всем
-    // регионам (режим "Россия"). Значения выше p99 прижимаются к верхнему
-    // цвету (interpolate за последним стопом не экстраполирует).
-    const scaleMax = scaleMode === "russia" && globalScale?.p99 > 0 ? globalScale.p99 : vmax;
 
     let url = dist.tile_url;
     if (decay.enabled && structure) {
@@ -378,11 +398,13 @@ export default function App() {
     // maxzoom 13: дальше maplibre переиспользует (overzoom) тайлы — сетка 1 км,
     // мельче детали нет, лишних запросов на z14+ не делаем.
     map.addSource("dist", { type: "vector", tiles: [url], minzoom: 0, maxzoom: 13 });
+    // Домен шкалы (distScaleMax) намеренно берётся замыканием, а не через
+    // зависимости эффекта: его живая смена обрабатывается setPaintProperty
+    // выше, пересоздание источника не нужно.
     addOrdered(map, ranks, {
       id: "dist-fill", type: "fill", source: "dist", "source-layer": "distribution",
       paint: {
-        "fill-color": ["interpolate", ["linear"], ["get", "value"],
-          ...DIST_STOPS.flatMap((c, i) => [scaleMax * i / (DIST_STOPS.length - 1), c])],
+        "fill-color": distFillColor(distScaleMax),
         "fill-opacity": 0.85,
       },
     }, RANK.dist);
@@ -428,7 +450,9 @@ export default function App() {
       map.off("mouseleave", "dist-fill", onLeave);
       hoverPopup.remove();
     };
-  }, [mapReady, liveComp, decay, structure, scaleMode, globalScale, indicators, indicator]);
+    // scaleMode/globalScale намеренно НЕ в зависимостях — см. setPaintProperty выше.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapReady, liveComp, decay, structure, indicators, indicator]);
 
   // Маски (над распределением). Зависят только от своего состояния.
   // Контур пиков (ТЗ п.2) на каждом видимом слое — не только на суммарном
@@ -818,6 +842,12 @@ export default function App() {
               <div>Распределение, шкала РФ (p99 по всем регионам)</div>
               <div className="bar" style={{ background: `linear-gradient(90deg, ${DIST_STOPS.join(", ")})` }} />
               <div className="ends"><span>0</span><span>≥ {fmt(globalScale.p99)}</span></div>
+            </>
+          ) : scaleMode === "russia" ? (
+            <>
+              <div>Распределение — считаем шкалу РФ…</div>
+              <div className="bar" style={{ background: `linear-gradient(90deg, ${DIST_STOPS.join(", ")})` }} />
+              <div className="ends"><span>0</span><span>{fmt(active.value_max)} (территория)</span></div>
             </>
           ) : (
             <>
