@@ -52,6 +52,14 @@ export const fetchConcentrationStructure = (
   return get(`/api/concentration-structure?${params.toString()}`);
 };
 
+// Фиксированная шкала показателя для режима "Россия" (селектор "Масштаб
+// отображения"): p99 абсолютных значений ячеек по всем загруженным регионам
+// при данных весах + national_total (итог по РФ) для подписи долей.
+export const fetchGlobalScale = (indicator, weights) => {
+  const params = new URLSearchParams({ indicator, weights: JSON.stringify(weights) });
+  return get(`/api/global-scale?${params.toString()}`);
+};
+
 // Живой пересчёт распределения по произвольным весам масок (slug -> вес).
 export async function recompute(regionId, indicator, weights) {
   const res = await fetch(`${API_BASE}/api/recompute`, {

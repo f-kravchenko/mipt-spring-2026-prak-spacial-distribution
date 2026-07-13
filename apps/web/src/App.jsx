@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
-import { fetchRegions, fetchIndicators, fetchMasks, fetchDefaultWeights, fetchMaskPeaks, fetchConcentrationStructure, recompute } from "./api";
+import { fetchRegions, fetchIndicators, fetchMasks, fetchDefaultWeights, fetchMaskPeaks, fetchConcentrationStructure, fetchGlobalScale, recompute } from "./api";
 
 // Специальный id пресета "Автоподбор": веса запрашиваются у бэкенда через
 // GET /api/default-weights?indicator=... (src/masks/weighting.resolve_weights,
@@ -150,6 +150,28 @@ export default function App() {
   const [peakShare, setPeakShare] = useState(0.90);
   const shareDebounceRef = useRef(null);
   useEffect(() => () => clearTimeout(shareDebounceRef.current), []);
+
+  // Масштаб отображения: "territory" — цвета растянуты до максимума текущей
+  // территории (видна её внутренняя структура); "russia" — шкала фиксирована
+  // по всем регионам (p99 из /api/global-scale): одинаковый цвет означает
+  // одинаковое абсолютное значение показателя, при переключении территории
+  // шкала не меняется. Значение ячейки одно и то же (cell_abs через
+  // региональный показатель) — селектор меняет только окраску и подписи.
+  const [scaleMode, setScaleMode] = useState("territory");
+  const [globalScale, setGlobalScale] = useState(null); // {p99, national_total}
+
+  // Шкала РФ зависит от показателя и весов -> перезапрашивается после каждого
+  // пересчёта (liveComp) в режиме "russia". liveComp меняется после setWeights,
+  // так что weights здесь всегда актуальны.
+  useEffect(() => {
+    if (scaleMode !== "russia" || !indicator || !liveComp) return;
+    let cancelled = false;
+    fetchGlobalScale(indicator, weights)
+      .then((s) => { if (!cancelled) setGlobalScale(s); })
+      .catch(() => { if (!cancelled) setGlobalScale(null); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scaleMode, indicator, liveComp]);
 
   useEffect(() => {
     const el = panelRef.current;
@@ -335,6 +357,10 @@ export default function App() {
     const dist = liveComp;
     if (!dist || !dist.tile_url) return;
     const vmax = dist.value_max && dist.value_max > 0 ? dist.value_max : 1;
+    // Домен цветовой шкалы: максимум территории или фиксированный p99 по всем
+    // регионам (режим "Россия"). Значения выше p99 прижимаются к верхнему
+    // цвету (interpolate за последним стопом не экстраполирует).
+    const scaleMax = scaleMode === "russia" && globalScale?.p99 > 0 ? globalScale.p99 : vmax;
 
     let url = dist.tile_url;
     if (decay.enabled && structure) {
@@ -356,7 +382,7 @@ export default function App() {
       id: "dist-fill", type: "fill", source: "dist", "source-layer": "distribution",
       paint: {
         "fill-color": ["interpolate", ["linear"], ["get", "value"],
-          ...DIST_STOPS.flatMap((c, i) => [vmax * i / (DIST_STOPS.length - 1), c])],
+          ...DIST_STOPS.flatMap((c, i) => [scaleMax * i / (DIST_STOPS.length - 1), c])],
         "fill-opacity": 0.85,
       },
     }, RANK.dist);
@@ -373,11 +399,22 @@ export default function App() {
       }, RANK.dist);
     }
 
+    // Тултип: абсолют + доля территории + доля России (все сразу, независимо
+    // от режима шкалы). Доля России = cell_abs / national_total — cell_abs уже
+    // получен через региональный показатель (tile_composition), умножать вес
+    // ячейки сразу на национальный итог нельзя.
+    const indMeta = indicators.find((i) => i.code === indicator);
     const hoverPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false });
     const onMove = (e) => {
-      const v = e.features[0].properties.value;
+      const v = Number(e.features[0].properties.value);
       map.getCanvas().style.cursor = "pointer";
-      hoverPopup.setLngLat(e.lngLat).setHTML(`<b>${fmt(Number(v))}</b> / ячейку`).addTo(map);
+      const unit = indMeta?.unit ? ` ${indMeta.unit}` : "";
+      const rows = [`Абсолютно: <b>${fmt(v)}</b>${unit}`];
+      if (dist.regional_value > 0)
+        rows.push(`Доля территории: ${fmt((v / dist.regional_value) * 100)}%`);
+      if (indMeta?.national_total > 0)
+        rows.push(`Доля России: ${fmt((v / indMeta.national_total) * 100)}%`);
+      hoverPopup.setLngLat(e.lngLat).setHTML(rows.join("<br>")).addTo(map);
     };
     const onLeave = () => {
       map.getCanvas().style.cursor = "";
@@ -391,7 +428,7 @@ export default function App() {
       map.off("mouseleave", "dist-fill", onLeave);
       hoverPopup.remove();
     };
-  }, [mapReady, liveComp, decay, structure]);
+  }, [mapReady, liveComp, decay, structure, scaleMode, globalScale, indicators, indicator]);
 
   // Маски (над распределением). Зависят только от своего состояния.
   // Контур пиков (ТЗ п.2) на каждом видимом слое — не только на суммарном
@@ -577,6 +614,25 @@ export default function App() {
             </div>
 
             <div className="section">
+              <label>Масштаб отображения</label>
+              <div className="scale-toggle">
+                <button
+                  className={scaleMode === "territory" ? "on" : ""}
+                  onClick={() => setScaleMode("territory")}
+                >Территория</button>
+                <button
+                  className={scaleMode === "russia" ? "on" : ""}
+                  onClick={() => setScaleMode("russia")}
+                >Россия</button>
+              </div>
+              <div className="sub" style={{ marginTop: 6, marginBottom: 0 }}>
+                {scaleMode === "territory"
+                  ? "Шкала растянута до максимума выбранной территории — видна её внутренняя структура."
+                  : "Шкала фиксирована по всем регионам (p99): одинаковый цвет — одинаковое абсолютное значение, при смене территории шкала не меняется."}
+              </div>
+            </div>
+
+            <div className="section">
               <label>Пресет весов</label>
               <select value={presetId} onChange={(e) => selectPreset(e.target.value)}>
                 <option value={AUTO_PRESET_ID}>Автоподбор (по показателю)</option>
@@ -757,9 +813,19 @@ export default function App() {
 
       {active && (
         <div className="legend">
-          <div>Распределение, {active.value_max != null ? `до ${fmt(active.value_max)}/ячейку` : ""}</div>
-          <div className="bar" style={{ background: `linear-gradient(90deg, ${DIST_STOPS.join(", ")})` }} />
-          <div className="ends"><span>0</span><span>{fmt(active.value_max)}</span></div>
+          {scaleMode === "russia" && globalScale?.p99 > 0 ? (
+            <>
+              <div>Распределение, шкала РФ (p99 по всем регионам)</div>
+              <div className="bar" style={{ background: `linear-gradient(90deg, ${DIST_STOPS.join(", ")})` }} />
+              <div className="ends"><span>0</span><span>≥ {fmt(globalScale.p99)}</span></div>
+            </>
+          ) : (
+            <>
+              <div>Распределение, {active.value_max != null ? `до ${fmt(active.value_max)}/ячейку` : ""}</div>
+              <div className="bar" style={{ background: `linear-gradient(90deg, ${DIST_STOPS.join(", ")})` }} />
+              <div className="ends"><span>0</span><span>{fmt(active.value_max)}</span></div>
+            </>
+          )}
         </div>
       )}
     </div>

@@ -18,6 +18,9 @@ class Indicator(BaseModel):
     elasticity: float | None = None
     r2: float | None = None
     indicator_type: str | None = None
+    # Итог по РФ (та же единица, что у региональных значений) — для режима
+    # "Россия": доля ячейки = value / national_total. См. миграцию 0008.
+    national_total: float | None = None
 
 
 class Mask(BaseModel):

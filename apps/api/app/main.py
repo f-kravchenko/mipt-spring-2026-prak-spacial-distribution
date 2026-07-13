@@ -107,7 +107,7 @@ def regions():
 @app.get("/api/indicators", response_model=list[Indicator])
 def indicators():
     sql = text("""
-        SELECT code, name, unit, elasticity, r2, indicator_type
+        SELECT code, name, unit, elasticity, r2, indicator_type, national_total
         FROM indicator ORDER BY code
     """)
     with engine.connect() as conn:
@@ -346,6 +346,84 @@ def recompute(req: RecomputeRequest):
         tile_url=tile_url, value_max=value_max, regional_value=rv, metrics=metrics,
         peak_threshold=peak_threshold,
     )
+
+
+# Глобальная шкала для режима отображения "Россия": p99 абсолютных значений
+# ячеек (raw/total_региона * rv_региона — та же нормализация, что в
+# tile_composition) по ВСЕМ загруженным регионам при данных весах. p99, а не
+# max — шкала не должна определяться одной аномальной ячейкой. Только
+# ненулевые ячейки (см. пороги пиков — то же схлопывание перцентиля в 0).
+# rv каждого региона — сумма его хранимого распределения (как _RV_SQL).
+_GLOBAL_SCALE_SQL = text("""
+    WITH wt AS (
+        SELECT m.id AS mask_id, (e.value)::double precision AS w
+        FROM json_each_text(CAST(:w AS json)) e JOIN mask m ON m.slug = e.key
+        WHERE (e.value)::double precision <> 0
+    ),
+    rv AS (
+        SELECT c.region_id, sum(dc.value) AS rv
+        FROM distribution_cell dc
+        JOIN composition c ON c.id = dc.composition_id
+        WHERE c.id IN (
+            SELECT min(id) FROM composition WHERE indicator_code = :i GROUP BY region_id
+        )
+        GROUP BY c.region_id
+    ),
+    cell AS (
+        SELECT gc.region_id, mcv.cell_id, sum(wt.w * mcv.weight) AS raw
+        FROM mask_cell_value mcv
+        JOIN wt ON wt.mask_id = mcv.mask_id
+        JOIN grid_cell gc ON gc.id = mcv.cell_id
+        WHERE mcv.indicator_code IN ('', :i)
+        GROUP BY gc.region_id, mcv.cell_id
+    ),
+    tot AS (SELECT region_id, sum(raw) AS total FROM cell GROUP BY region_id),
+    vals AS (
+        SELECT cell.raw / NULLIF(tot.total, 0) * rv.rv AS v
+        FROM cell JOIN tot USING (region_id) JOIN rv USING (region_id)
+    )
+    SELECT percentile_cont(0.99) WITHIN GROUP (ORDER BY v) AS p99,
+           max(v) AS vmax, count(*) AS n
+    FROM vals WHERE v > 0
+""")
+
+
+@app.get("/api/global-scale")
+def global_scale(
+    indicator: str = Query(...),
+    weights: str = Query(..., description="JSON slug->вес, тот же формат, что POST /api/recompute"),
+):
+    """
+    Фиксированная шкала показателя для режима "Россия": одинаковый цвет —
+    одинаковое абсолютное значение в одних единицах, независимо от выбранной
+    территории. Считается по всем загруженным регионам с данными весами;
+    возвращает также national_total (итог по РФ из indicator, миграция 0008)
+    для подписи долей.
+    """
+    try:
+        weights_dict = {k: v for k, v in json.loads(weights).items() if v}
+    except (json.JSONDecodeError, AttributeError):
+        raise HTTPException(400, "weights должен быть JSON-объектом slug->вес")
+    if not weights_dict:
+        raise HTTPException(400, "Задайте хотя бы один ненулевой вес")
+    w_json = json.dumps(weights_dict, ensure_ascii=False)
+
+    with engine.connect() as conn:
+        row = conn.execute(
+            _GLOBAL_SCALE_SQL, {"w": w_json, "i": indicator}
+        ).mappings().first()
+        national = conn.execute(
+            text("SELECT national_total FROM indicator WHERE code = :c"), {"c": indicator}
+        ).scalar()
+
+    if not row or row["p99"] is None:
+        raise HTTPException(404, "Нет данных для расчёта глобальной шкалы")
+    return {
+        "p99": float(row["p99"]),
+        "value_max": float(row["vmax"]),
+        "cells": int(row["n"]),
+        "national_total": float(national) if national is not None else None,
+    }
 
 
 # Точки-пики для линий концентрации (ТЗ п.5): те же взвешенные значения

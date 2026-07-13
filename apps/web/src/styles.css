@@ -66,6 +66,12 @@ html, body, #root {
 
 select { width: 100%; padding: 7px; border: 1px solid var(--panel-border); border-radius: 6px; font-size: 13px; }
 
+/* Сегмент-переключатель "Масштаб отображения: Территория / Россия" */
+.scale-toggle { display: flex; border: 1px solid var(--panel-border); border-radius: 6px; overflow: hidden; }
+.scale-toggle button { flex: 1; padding: 7px; border: none; background: #fff; font-size: 13px; cursor: pointer; color: var(--muted); }
+.scale-toggle button + button { border-left: 1px solid var(--panel-border); }
+.scale-toggle button.on { background: var(--accent); color: #fff; font-weight: 600; }
+
 .mask-row { padding: 8px 0; border-bottom: 1px solid #f0f0f0; }
 .mask-row .head { display: flex; align-items: center; gap: 8px; }
 .mask-row .title { flex: 1; font-size: 13px; cursor: pointer; }

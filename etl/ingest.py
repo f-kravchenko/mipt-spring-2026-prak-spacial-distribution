@@ -115,19 +115,30 @@ def register_masks(engine):
     return slug_to_id
 
 
-def load_indicators(engine, indicators):
+def load_indicators(engine, indicators, parquet_path=None, year=None):
+    # national_total — итог по РФ (object_level='Страна' в том же parquet, та же
+    # единица измерения, что у региональных строк) — для режима "Россия" на
+    # фронте: доля ячейки = cell_abs / national_total, где cell_abs получен
+    # через РЕГИОНАЛЬНОЕ значение. См. миграцию 0008.
     with engine.begin() as conn:
         for code, meta in indicators.items():
+            national = None
+            if parquet_path is not None:
+                national = regional_value_lookup(
+                    parquet_path, 'Российская Федерация', code, year,
+                    subsection=meta.get('subsection'), object_level='Страна')
             conn.execute(text("""
-                INSERT INTO indicator (code, name, unit, elasticity, r2, indicator_type)
-                VALUES (:code, :name, :unit, :elasticity, :r2, :itype)
+                INSERT INTO indicator (code, name, unit, elasticity, r2, indicator_type,
+                                       national_total)
+                VALUES (:code, :name, :unit, :elasticity, :r2, :itype, :national)
                 ON CONFLICT (code) DO UPDATE SET
                     name=EXCLUDED.name, unit=EXCLUDED.unit, elasticity=EXCLUDED.elasticity,
-                    r2=EXCLUDED.r2, indicator_type=EXCLUDED.indicator_type
+                    r2=EXCLUDED.r2, indicator_type=EXCLUDED.indicator_type,
+                    national_total=EXCLUDED.national_total
             """), {
                 'code': code, 'name': meta['name'], 'unit': meta.get('unit'),
                 'elasticity': meta.get('elasticity'), 'r2': meta.get('r2'),
-                'itype': meta.get('indicator_type'),
+                'itype': meta.get('indicator_type'), 'national': national,
             })
 
 
@@ -412,15 +423,29 @@ def composition_run(grid, regional_value, code, conf, params):
     )
 
 
-def regional_value_lookup(parquet_path, object_name, code, year):
+def regional_value_lookup(parquet_path, object_name, code, year,
+                          subsection=None, object_level='Регион'):
     # Predicate/column pushdown: читаем только подходящие строки, а не весь
     # массив (~2 млн строк, ~2 ГБ в памяти) — иначе OOM при чтении 3 раза.
+    #
+    # subsection обязателен для показателей с несколькими подразделами
+    # (Y477090007 — четыре секции ОКВЭД на один object_name): без фильтра
+    # sel[0] возвращает первую попавшуюся строку файла ("Водоснабжение..."
+    # вместо "Обрабатывающие производства") — так в БД попадали значения
+    # чужого подраздела. Задаётся в etl/config.yaml -> indicators.<code>.subsection.
     df = pd.read_parquet(
         parquet_path,
-        columns=['object_name', 'object_level', 'year', 'indicator_code', 'indicator_value'],
-        filters=[('indicator_code', '==', code), ('object_level', '==', 'Регион'),
+        columns=['object_name', 'object_level', 'year', 'indicator_code',
+                 'indicator_value', 'subsection'],
+        filters=[('indicator_code', '==', code), ('object_level', '==', object_level),
                  ('year', '==', year), ('object_name', '==', object_name)],
     )
+    if subsection is not None:
+        df = df[df['subsection'] == subsection]
+    if len(df) > 1:
+        print(f"  ВНИМАНИЕ: {code}/{object_name}: {len(df)} строк "
+              f"(подразделы: {df['subsection'].unique().tolist()}) — задайте "
+              f"indicators.{code}.subsection в конфиге; взята первая")
     sel = df['indicator_value'].values
     return float(sel[0]) if len(sel) else None
 
@@ -445,7 +470,7 @@ def main():
     cfg = yaml.safe_load(open(args.config, encoding='utf-8'))
     engine = create_engine(args.database_url)
 
-    load_indicators(engine, cfg['indicators'])
+    load_indicators(engine, cfg['indicators'], cfg['rosstat_parquet'], cfg['year'])
     slug_to_id = register_masks(engine)
     params = {'city_sigma_km': cfg['distances']['city_sigma_km'],
               'center_sigma_km': cfg['distances']['center_sigma_km']}
@@ -457,7 +482,8 @@ def main():
 
         regional_values = {}
         for code in cfg['indicators']:
-            val = regional_value_lookup(cfg['rosstat_parquet'], reg['object_name'], code, cfg['year'])
+            val = regional_value_lookup(cfg['rosstat_parquet'], reg['object_name'], code,
+                                        cfg['year'], cfg['indicators'][code].get('subsection'))
             if val is None:
                 print(f"  нет значения {code} для {reg['object_name']} — пропуск показателя")
                 continue
