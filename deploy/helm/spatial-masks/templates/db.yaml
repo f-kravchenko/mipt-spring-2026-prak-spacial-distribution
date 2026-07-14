@@ -65,17 +65,26 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
+            # /dev/shm по умолчанию 64Mi — параллельные запросы Postgres по
+            # сетке 100k+ ячеек падают с "could not resize shared memory
+            # segment ... No space left on device" (DiskFull).
+            - name: dshm
+              mountPath: /dev/shm
             {{- if .Values.migrate.enabled }}
             - name: migrations
               mountPath: /docker-entrypoint-initdb.d
               readOnly: true
             {{- end }}
-      {{- if .Values.migrate.enabled }}
       volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 512Mi
+        {{- if .Values.migrate.enabled }}
         - name: migrations
           configMap:
             name: {{ include "spatial-masks.fullname" . }}-migrations
-      {{- end }}
+        {{- end }}
   volumeClaimTemplates:
     - metadata:
         name: data

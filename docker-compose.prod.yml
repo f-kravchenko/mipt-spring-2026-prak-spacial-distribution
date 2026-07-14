@@ -4,6 +4,9 @@ services:
   db:
     image: ${POSTGIS_IMAGE:-postgis/postgis:16-3.4}
     restart: unless-stopped
+    # /dev/shm по умолчанию 64МБ — параллельные запросы по сетке 100k+ ячеек
+    # падают с DiskFull ("could not resize shared memory segment").
+    shm_size: 512mb
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-masks}
       POSTGRES_USER: ${POSTGRES_USER:-masks}

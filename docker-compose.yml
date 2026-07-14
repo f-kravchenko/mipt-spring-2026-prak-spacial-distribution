@@ -3,6 +3,9 @@ services:
     # arm64-сборка PostGIS (нативно на Apple Silicon; та же, что в кластере).
     # На Intel-хосте заменить на postgis/postgis:16-3.4.
     image: imresamu/postgis-arm64:16-3.6-alpine
+    # /dev/shm по умолчанию 64МБ — параллельные запросы по сетке 100k+ ячеек
+    # падают с DiskFull ("could not resize shared memory segment").
+    shm_size: 512mb
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-masks}
       POSTGRES_USER: ${POSTGRES_USER:-masks}
