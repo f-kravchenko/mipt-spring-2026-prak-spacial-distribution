@@ -9,6 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource/golos-text": "^5.0.0",
+    "@fontsource/ibm-plex-mono": "^5.0.0",
     "maplibre-gl": "^4.5.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

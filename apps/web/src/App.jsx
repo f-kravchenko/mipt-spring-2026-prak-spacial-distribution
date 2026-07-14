@@ -110,7 +110,9 @@ export default function App() {
   const [indicator, setIndicator] = useState(null);
   const [maskState, setMaskState] = useState({}); // slug -> {visible, opacity}
   const [contractSlug, setContractSlug] = useState(null);
-  const [showCities, setShowCities] = useState(true);
+  // Города по умолчанию скрыты — это справочный оверлей для визуальной сверки
+  // распределения, а не часть результата; включаются в панели слоёв.
+  const [showCities, setShowCities] = useState(false);
   const [showRoads, setShowRoads] = useState(true);
 
   // Распределение всегда считается живьём по весам; пресет — стартовый набор весов.
@@ -127,10 +129,6 @@ export default function App() {
   const panelRef = useRef(null);
   const [panelWidth, setPanelWidth] = useState(340);
 
-  // Правая плавающая панель слоёв/масок (аналог "стопки слоёв" в Google Maps),
-  // по умолчанию свёрнута — открывается по клику на иконку.
-  const [layersOpen, setLayersOpen] = useState(false);
-
   // Debounce автопересчёта при движении слайдера веса.
   const weightDebounceRef = useRef(null);
   useEffect(() => () => clearTimeout(weightDebounceRef.current), []);
@@ -143,6 +141,26 @@ export default function App() {
   const [decay, setDecay] = useState({ enabled: false, sigmaKm: 10, beta: 0.3 });
   const decayDebounceRef = useRef(null);
   useEffect(() => () => clearTimeout(decayDebounceRef.current), []);
+
+  // Контур ячеек-пиков (топ-5%) на суммарном слое и слоях масок. Выключение —
+  // через setLayoutProperty(visibility), НЕ через пересоздание слоёв (см.
+  // урок с переключателем шкалы: пересоздание источника перезагружает тайлы).
+  const [showPeaks, setShowPeaks] = useState(true);
+  // Фиолетовые точки-пики и рёбра MST (структура концентрации) — тем же приёмом.
+  const [showStructure, setShowStructure] = useState(true);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    const vis = showPeaks ? "visible" : "none";
+    if (map.getLayer("dist-peak-outline")) map.setLayoutProperty("dist-peak-outline", "visibility", vis);
+    for (const m of masks) {
+      const id = `mask-${m.slug}-peak-outline`;
+      if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis);
+    }
+    const svis = showStructure ? "visible" : "none";
+    for (const id of ["concentration-lines", "concentration-peaks"])
+      if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", svis);
+  }, [mapReady, showPeaks, showStructure, masks]);
 
   // Правило Парето для пиков концентрации: доля массы пиковых ячеек, которую
   // накрывают сильнейшие кластеры (дефолт 0.90 — Парето-90). Живой слайдер с
@@ -295,14 +313,31 @@ export default function App() {
   // Пересчёт распределения по явному набору весов (кнопка/пресет/смена региона/debounce).
   // Линии концентрации (ТЗ п.5) запрашиваются тем же набором весов — пики
   // на суммарном слое зависят от весов так же, как сам слой распределения.
+  // Порядковая защита от гонки ответов: recompute тяжёлый (~1-2 с SQL), запросы
+  // летят параллельно, и без счётчика ПОЗДНИЙ ответ от УСТАРЕВШИХ весов может
+  // перетереть свежий (типичный случай: подвигал слайдеры -> "сброс" -> слайдеры
+  // вернулись, а карта осталась от нащёлканных весов). Принимаем только ответ
+  // последнего отправленного запроса; structure — отдельный счётчик, т.к. её
+  // запрашивают и runRecompute, и слайдер Парето.
+  const distSeqRef = useRef(0);
+  const structSeqRef = useRef(0);
+
+  const fetchStructureSafe = (w, share) => {
+    const seq = ++structSeqRef.current;
+    fetchConcentrationStructure(regionId, indicator, w, 0.10, 10, share)
+      .then((s) => { if (seq === structSeqRef.current) setStructure(s); })
+      .catch(() => { if (seq === structSeqRef.current) setStructure(null); });
+  };
+
+  const [computing, setComputing] = useState(false);
   const runRecompute = (w) => {
     if (regionId == null || !indicator) return;
+    const seq = ++distSeqRef.current;
+    setComputing(true);
     recompute(regionId, indicator, w)
-      .then((r) => setLiveComp({ ...r, sum_preserved: true }))  // инвариант по построению
-      .catch(() => setLiveComp(null));
-    fetchConcentrationStructure(regionId, indicator, w, 0.10, 10, peakShare)
-      .then(setStructure)
-      .catch(() => setStructure(null));
+      .then((r) => { if (seq === distSeqRef.current) { setLiveComp({ ...r, sum_preserved: true }); setComputing(false); } })
+      .catch(() => { if (seq === distSeqRef.current) { setLiveComp(null); setComputing(false); } });
+    fetchStructureSafe(w, peakShare);
   };
 
   // Смена доли Парето перезапрашивает только пики/линии (не пересчёт слоя):
@@ -312,9 +347,7 @@ export default function App() {
     if (regionId == null || !indicator) return;
     clearTimeout(shareDebounceRef.current);
     shareDebounceRef.current = setTimeout(() => {
-      fetchConcentrationStructure(regionId, indicator, weights, 0.10, 10, peakShare)
-        .then(setStructure)
-        .catch(() => setStructure(null));
+      fetchStructureSafe(weights, peakShare);
     }, WEIGHT_DEBOUNCE_MS);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [peakShare]);
@@ -417,7 +450,15 @@ export default function App() {
       addOrdered(map, ranks, {
         id: "dist-peak-outline", type: "line", source: "dist", "source-layer": "distribution",
         filter: [">=", ["get", "value"], dist.peak_threshold],
-        paint: { "line-color": "#ffd400", "line-width": 1.6, "line-opacity": 0.9 },
+        layout: { visibility: showPeaks ? "visible" : "none" },
+        // Толщина/прозрачность по зуму: на обзорном масштабе ячейка — 1-3 px,
+        // и фиксированный контур визуально забивает заливку (сплошная чернота
+        // вместо тепловой карты). На обзоре контур почти исчезает.
+        paint: {
+          "line-color": "#111111",
+          "line-width": ["interpolate", ["linear"], ["zoom"], 7, 0.1, 10, 0.7, 13, 1.6],
+          "line-opacity": ["interpolate", ["linear"], ["zoom"], 7, 0.15, 10, 0.5, 13, 0.8],
+        },
       }, RANK.dist);
     }
 
@@ -489,7 +530,13 @@ export default function App() {
             addOrdered(map, ranks, {
               id: `${sid}-peak-outline`, type: "line", source: sid, "source-layer": "mask",
               filter: [">=", ["get", "weight"], r.peak_threshold],
-              paint: { "line-color": "#ffd400", "line-width": 1.2, "line-opacity": 0.85 },
+              layout: { visibility: showPeaks ? "visible" : "none" },
+              // см. dist-peak-outline: контур растворяется на обзорном зуме
+              paint: {
+                "line-color": "#111111",
+                "line-width": ["interpolate", ["linear"], ["zoom"], 7, 0.1, 10, 0.6, 13, 1.2],
+                "line-opacity": ["interpolate", ["linear"], ["zoom"], 7, 0.15, 10, 0.5, 13, 0.8],
+              },
             }, RANK.mask);
           })
           .catch(() => {}); // нет данных пиков — не рисуем контур, не критично
@@ -552,6 +599,7 @@ export default function App() {
     addOrdered(map, ranks, {
       id: "concentration-lines", type: "line", source: "concentration",
       filter: ["==", ["get", "kind"], "concentration_line"],
+      layout: { visibility: showStructure ? "visible" : "none" },
       paint: {
         "line-color": "#7b2cbf", "line-width": 2,
         "line-dasharray": [2, 1.5], "line-opacity": 0.85,
@@ -560,6 +608,7 @@ export default function App() {
     addOrdered(map, ranks, {
       id: "concentration-peaks", type: "circle", source: "concentration",
       filter: ["==", ["get", "kind"], "peak"],
+      layout: { visibility: showStructure ? "visible" : "none" },
       paint: {
         "circle-radius": 7, "circle-color": "#7b2cbf",
         "circle-stroke-color": "#fff", "circle-stroke-width": 2, "circle-opacity": 0.95,
@@ -595,6 +644,20 @@ export default function App() {
       weightDebounceRef.current = setTimeout(() => runRecompute(next), WEIGHT_DEBOUNCE_MS);
       return next;
     });
+  };
+
+  // Деактивация маски чекбоксом = коэффициент 0 (маска выпадает из композиции;
+  // нормировка на total в tile_composition переиспользует освободившийся вес).
+  // Прежний вес запоминается, чтобы повторное включение возвращало его, а не 0.
+  const prevWeightsRef = useRef({});
+  const toggleWeight = (slug) => {
+    const w = weights[slug] ?? 0;
+    if (w > 0) {
+      prevWeightsRef.current[slug] = w;
+      setWeightLive(slug, 0);
+    } else {
+      setWeightLive(slug, prevWeightsRef.current[slug] || 0.1);
+    }
   };
 
   const contract = masks.find((m) => m.slug === contractSlug);
@@ -642,22 +705,19 @@ export default function App() {
               <div className="scale-toggle">
                 <button
                   className={scaleMode === "territory" ? "on" : ""}
+                  title="Шкала растянута до максимума выбранной территории — видна её внутренняя структура"
                   onClick={() => setScaleMode("territory")}
                 >Территория</button>
                 <button
                   className={scaleMode === "russia" ? "on" : ""}
+                  title="Шкала фиксирована по всем регионам (p99): одинаковый цвет — одинаковое абсолютное значение"
                   onClick={() => setScaleMode("russia")}
                 >Россия</button>
               </div>
-              <div className="sub" style={{ marginTop: 6, marginBottom: 0 }}>
-                {scaleMode === "territory"
-                  ? "Шкала растянута до максимума выбранной территории — видна её внутренняя структура."
-                  : "Шкала фиксирована по всем регионам (p99): одинаковый цвет — одинаковое абсолютное значение, при смене территории шкала не меняется."}
-              </div>
             </div>
 
-            <div className="section">
-              <label>Пресет весов</label>
+            <details className="section fold">
+              <summary>Пресет весов</summary>
               <select value={presetId} onChange={(e) => selectPreset(e.target.value)}>
                 <option value={AUTO_PRESET_ID}>Автоподбор (по показателю)</option>
                 {PRESETS.map((p) => (
@@ -670,48 +730,105 @@ export default function App() {
                   <span>вес маски в составе · сумма сохраняется</span>
                   <span className="reset" onClick={() => selectPreset(presetId)}>сброс</span>
                 </div>
-                {masks.map((m) => (
-                  <div className="wrow" key={m.slug}>
-                    <span className="wname">{m.title}</span>
-                    <input type="range" min="0" max="1" step="0.05"
-                      value={weights[m.slug] ?? 0}
-                      onChange={(e) => setWeightLive(m.slug, Number(e.target.value))} />
-                    <span className="wval">{(weights[m.slug] ?? 0).toFixed(2)}</span>
-                  </div>
-                ))}
-                <button className="recompute-btn" onClick={() => runRecompute(weights)}>
-                  Пересчитать
+                {masks.map((m) => {
+                  const w = weights[m.slug] ?? 0;
+                  const enabled = w > 0;
+                  const st = maskState[m.slug] || { visible: false, opacity: 0.7 };
+                  return (
+                    <div className="mask-row" key={m.slug}>
+                      <div className="head">
+                        <input type="checkbox" checked={enabled}
+                          title="Участие в композиции (выкл = вес 0)"
+                          onChange={() => toggleWeight(m.slug)} />
+                        <span className="title" style={{ opacity: enabled ? 1 : 0.5 }}
+                          onClick={() => toggleWeight(m.slug)}>{m.title}</span>
+                        {m.is_baseline && <span className="badge">baseline</span>}
+                        <span className={"eye" + (st.visible ? " on" : "")}
+                          title="Показать маску слоем на карте"
+                          onClick={() => toggleMask(m.slug)}>&#128065;</span>
+                        <span className="info" title="Контракт маски"
+                          onClick={() => setContractSlug(m.slug)}>i</span>
+                      </div>
+                      <div className="wrow" style={{ border: "none", padding: "2px 0 0" }}>
+                        <input type="range" min="0" max="1" step="0.05"
+                          disabled={!enabled}
+                          value={w}
+                          onChange={(e) => setWeightLive(m.slug, Number(e.target.value))} />
+                        <span className="wval">{w.toFixed(2)}</span>
+                      </div>
+                      {st.visible && (
+                        <div className="wrow" style={{ border: "none", padding: "2px 0 0" }}>
+                          <span className="wname">прозрачность слоя</span>
+                          <input type="range" min="0" max="1" step="0.05" value={st.opacity}
+                            onChange={(e) => setOpacity(m.slug, Number(e.target.value))} />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                <button className="recompute-btn" disabled={computing}
+                  onClick={() => runRecompute(weights)}>
+                  {computing ? "Пересчёт…" : "Пересчитать"}
                 </button>
-                {!liveComp && <div className="sub">пересчёт…</div>}
               </div>
 
-              {active && active.metrics && <Metrics comp={active} />}
-            </div>
+              {contract && <MaskContract m={contract} onClose={() => setContractSlug(null)} />}
+            </details>
 
-            <div className="section">
-              <label>Пики концентрации (ТЗ п.4-5)</label>
+            {active && active.metrics && (
+              <details className="section fold">
+                <summary>Метрики качества</summary>
+                <Metrics comp={active} />
+              </details>
+            )}
+
+            <details className="section fold">
+              <summary>
+                Пики концентрации
+                {structure && (
+                  <span className="fold-note">
+                    {structure.features.filter((f) => f.properties.kind === "peak").length} пик(ов)
+                  </span>
+                )}
+              </summary>
               <div className="weights">
-                <div className="wrow">
+                <div className="mask-row" style={{ border: "none", padding: "0 0 6px" }}>
+                  <div className="head">
+                    <input
+                      type="checkbox"
+                      checked={showPeaks}
+                      onChange={() => setShowPeaks((v) => !v)}
+                    />
+                    <span className="title" onClick={() => setShowPeaks((v) => !v)}>
+                      Контур ячеек-пиков (топ-5%)
+                    </span>
+                  </div>
+                </div>
+                <div className="mask-row" style={{ border: "none", padding: "0 0 6px" }}>
+                  <div className="head">
+                    <input
+                      type="checkbox"
+                      checked={showStructure}
+                      onChange={() => setShowStructure((v) => !v)}
+                    />
+                    <span className="title" onClick={() => setShowStructure((v) => !v)}>
+                      Точки-пики и линии концентрации
+                    </span>
+                  </div>
+                </div>
+                <div className="wrow"
+                  title="Пики — сильнейшие кластеры, вместе накрывающие эту долю массы пиковых ячеек. Число пиков подстраивается под структуру региона, критерий одинаков для всех регионов.">
                   <span className="wname">Парето: доля массы</span>
                   <input type="range" min="0.5" max="0.99" step="0.01"
                     value={peakShare}
                     onChange={(e) => setPeakShare(Number(e.target.value))} />
                   <span className="wval">{Math.round(peakShare * 100)}%</span>
                 </div>
-                <div className="sub" style={{ marginTop: 6, marginBottom: 0 }}>
-                  Пики — сильнейшие кластеры, вместе накрывающие эту долю массы
-                  пиковых ячеек. Число пиков подстраивается под структуру
-                  региона (моноцентричный — единицы, полицентричный — десятки),
-                  критерий одинаков для всех регионов.
-                  {structure && (
-                    <> Сейчас: {structure.features.filter((f) => f.properties.kind === "peak").length} пик(ов).</>
-                  )}
-                </div>
               </div>
-            </div>
+            </details>
 
-            <div className="section">
-              <label>Затухание от пиков (ТЗ п.6)</label>
+            <details className="section fold">
+              <summary>Затухание от пиков</summary>
               <div className="weights">
                 <div className="mask-row" style={{ border: "none", padding: "0 0 6px" }}>
                   <div className="head">
@@ -722,6 +839,7 @@ export default function App() {
                     />
                     <span
                       className="title"
+                      title="σ=10 км как отправная точка — по аналогии с «Близость к городам»; подбирается визуально"
                       onClick={() => setDecay((d) => ({ ...d, enabled: !d.enabled }))}
                     >
                       Показать зону затухания
@@ -744,91 +862,37 @@ export default function App() {
                         onChange={(e) => setDecay((d) => ({ ...d, beta: Number(e.target.value) }))} />
                       <span className="wval">{decay.beta.toFixed(2)}</span>
                     </div>
-                    <div className="sub" style={{ marginTop: 6, marginBottom: 0 }}>
-                      Отправная точка σ=10 км — по аналогии с «Близость к городам»
-                      (та же логика затухания). Крути и сверяй визуально с реальным
-                      расположением городов/дорог на карте.
-                    </div>
                   </>
                 )}
               </div>
-            </div>
+            </details>
+
+            <details className="section fold">
+              <summary>Слои карты</summary>
+              <div className="mask-row">
+                <div className="head">
+                  <input type="checkbox" checked={showCities} onChange={() => setShowCities((v) => !v)} />
+                  <span className="title" onClick={() => setShowCities((v) => !v)}>
+                    Города <span className="dot city" />
+                  </span>
+                </div>
+              </div>
+              <div className="mask-row">
+                <div className="head">
+                  <input type="checkbox" checked={showRoads}
+                    disabled={!selRegion?.roads_tile_url}
+                    onChange={() => setShowRoads((v) => !v)} />
+                  <span className="title" onClick={() => selRegion?.roads_tile_url && setShowRoads((v) => !v)}
+                    style={{ opacity: selRegion?.roads_tile_url ? 1 : 0.45 }}>
+                    Дороги <span className="dot road" />
+                    {!selRegion?.roads_tile_url && <span className="badge">нет данных</span>}
+                  </span>
+                </div>
+              </div>
+            </details>
           </div>
         )}
       </div>
-
-      <button
-        className="layers-toggle"
-        onClick={() => setLayersOpen((o) => !o)}
-        title="Слои карты и маски"
-        aria-pressed={layersOpen}
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <polygon points="12 2 2 7 12 12 22 7 12 2" />
-          <polyline points="2 17 12 22 22 17" />
-          <polyline points="2 12 12 17 22 12" />
-        </svg>
-      </button>
-
-      {layersOpen && (
-        <div className="layers-panel">
-          <div className="layers-panel-head">
-            <span>Слои и маски</span>
-            <span className="close" onClick={() => setLayersOpen(false)}>✕</span>
-          </div>
-
-          <div className="section">
-            <label>Слои карты</label>
-            <div className="mask-row">
-              <div className="head">
-                <input type="checkbox" checked={showCities} onChange={() => setShowCities((v) => !v)} />
-                <span className="title" onClick={() => setShowCities((v) => !v)}>
-                  Города <span className="dot city" />
-                </span>
-              </div>
-            </div>
-            <div className="mask-row">
-              <div className="head">
-                <input type="checkbox" checked={showRoads}
-                  disabled={!selRegion?.roads_tile_url}
-                  onChange={() => setShowRoads((v) => !v)} />
-                <span className="title" onClick={() => selRegion?.roads_tile_url && setShowRoads((v) => !v)}
-                  style={{ opacity: selRegion?.roads_tile_url ? 1 : 0.45 }}>
-                  Дороги <span className="dot road" />
-                  {!selRegion?.roads_tile_url && <span className="badge">нет данных</span>}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="section">
-            <label>Маски (наложение слоёв)</label>
-            {masks.map((m) => {
-              const st = maskState[m.slug] || { visible: false, opacity: 0.7 };
-              return (
-                <div className="mask-row" key={m.slug}>
-                  <div className="head">
-                    <input type="checkbox" checked={st.visible} onChange={() => toggleMask(m.slug)} />
-                    <span className="title" onClick={() => toggleMask(m.slug)}>{m.title}</span>
-                    {m.is_baseline && <span className="badge">baseline</span>}
-                    <span className="info" title="Контракт маски" onClick={() => setContractSlug(m.slug)}>i</span>
-                  </div>
-                  {st.visible && (
-                    <input type="range" min="0" max="1" step="0.05" value={st.opacity}
-                      onChange={(e) => setOpacity(m.slug, Number(e.target.value))} />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          {contract && (
-            <div className="section">
-              <MaskContract m={contract} onClose={() => setContractSlug(null)} />
-            </div>
-          )}
-        </div>
-      )}
 
       <div className="locator" style={{ left: collapsed ? 20 : panelWidth + 32 }}>
         <div className="locator-title">Расположение региона</div>
