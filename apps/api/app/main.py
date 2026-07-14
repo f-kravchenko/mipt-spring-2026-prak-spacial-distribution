@@ -14,7 +14,7 @@ from sqlalchemy import text
 
 from .db import TILES_BASE_URL, engine
 from .schemas import (
-    Composition, Indicator, Mask, RecomputeRequest, RecomputeResult, Region, ServiceConfig,
+    Indicator, Mask, RecomputeRequest, RecomputeResult, Region,
 )
 
 # Автоподбор весов (§9 "обоснование весов") — считается в Python
@@ -55,10 +55,6 @@ def _mask_tile_url(slug: str) -> str:
     return f"{TILES_BASE_URL}/tile_mask/{{z}}/{{x}}/{{y}}?mask={slug}"
 
 
-def _distribution_tile_url(comp_id: int) -> str:
-    return f"{TILES_BASE_URL}/tile_distribution/{{z}}/{{x}}/{{y}}?composition={comp_id}"
-
-
 def _city_tile_url(region_id: int) -> str:
     return f"{TILES_BASE_URL}/tile_city/{{z}}/{{x}}/{{y}}?region={region_id}"
 
@@ -72,11 +68,6 @@ def health():
     with engine.connect() as conn:
         conn.execute(text("SELECT 1"))
     return {"status": "ok"}
-
-
-@app.get("/api/config", response_model=ServiceConfig)
-def config():
-    return ServiceConfig(tiles_base_url=TILES_BASE_URL)
 
 
 @app.get("/api/regions", response_model=list[Region])
@@ -200,62 +191,6 @@ def default_weights(indicator: str = Query(...)):
     return {_MASK_SLUG[k]: v for k, v in weights_internal.items() if k in _MASK_SLUG}
 
 
-@app.get("/api/compositions", response_model=list[Composition])
-def compositions(
-    region_id: int | None = Query(None),
-    indicator: str | None = Query(None),
-):
-    where = []
-    params: dict = {}
-    if region_id is not None:
-        where.append("c.region_id = :region_id")
-        params["region_id"] = region_id
-    if indicator is not None:
-        where.append("c.indicator_code = :indicator")
-        params["indicator"] = indicator
-    clause = ("WHERE " + " AND ".join(where)) if where else ""
-
-    comp_sql = text(f"""
-        SELECT c.id, c.region_id, c.indicator_code, c.year, c.label, c.method,
-               c.weights, c.smoothing_alpha, c.sum_preserved
-        FROM composition c {clause}
-        ORDER BY c.region_id, c.indicator_code, c.id
-    """)
-    with engine.connect() as conn:
-        comps = conn.execute(comp_sql, params).mappings().all()
-        if not comps:
-            return []
-        ids = [c["id"] for c in comps]
-        m_rows = conn.execute(
-            text("SELECT composition_id, metric, value FROM quality_metric "
-                 "WHERE composition_id = ANY(:ids)"),
-            {"ids": ids},
-        ).mappings().all()
-        max_rows = conn.execute(
-            text("SELECT composition_id, MAX(value) AS vmax FROM distribution_cell "
-                 "WHERE composition_id = ANY(:ids) GROUP BY composition_id"),
-            {"ids": ids},
-        ).mappings().all()
-
-    metrics_by_comp: dict[int, dict[str, float]] = {}
-    for mr in m_rows:
-        metrics_by_comp.setdefault(mr["composition_id"], {})[mr["metric"]] = mr["value"]
-    vmax_by_comp = {r["composition_id"]: r["vmax"] for r in max_rows}
-
-    return [
-        Composition(
-            id=c["id"], region_id=c["region_id"], indicator_code=c["indicator_code"],
-            year=c["year"], label=c["label"], method=c["method"],
-            weights=c["weights"] or {}, smoothing_alpha=c["smoothing_alpha"],
-            sum_preserved=c["sum_preserved"],
-            metrics=metrics_by_comp.get(c["id"], {}),
-            value_max=vmax_by_comp.get(c["id"]),
-            tile_url=_distribution_tile_url(c["id"]),
-        )
-        for c in comps
-    ]
-
-
 # Региональное значение показателя = сумма распределения любой его композиции
 # (все они сохраняют сумму). regional_value-таблица в этой сборке не заполнена.
 _RV_SQL = text("""
@@ -267,9 +202,8 @@ _RV_SQL = text("""
 """)
 
 # Взвешенная сумма масок по ячейкам + агрегаты для нормировки и метрик.
-# peak.p95 — 95-й перцентиль raw по ненулевым ячейкам региона (top 5%, тот же top_frac,
-# что дефолт composition.detect_peaks(method="percentile")) — используется
-# ниже, чтобы посчитать peak_threshold в тех же единицах, что value_max.
+# peak.p95 — 95-й перцентиль raw по ненулевым ячейкам региона (top 5%) —
+# используется ниже, чтобы посчитать peak_threshold в тех же единицах, что value_max.
 _AGG_SQL = text("""
     WITH wt AS (
         SELECT m.id AS mask_id, (e.value)::double precision AS w
@@ -435,7 +369,8 @@ def global_scale(
 # не вынесен в параметр (в отличие от sigma_km/beta ниже — те действительно
 # требуют эмпирического подбора). DISTINCT ON (cid) ... ORDER BY raw DESC
 # берёт ячейку с максимальным значением в каждом кластере как точку-пик —
-# не центроид кластера, см. обоснование в composition.cluster_peaks.
+# не центроид кластера (на невыпуклой форме кластера центроид может попасть
+# в ячейку с низким значением — например, подковообразный кластер вокруг реки).
 _PEAK_POINTS_SQL = text("""
     WITH wt AS (
         SELECT m.id AS mask_id, (e.value)::double precision AS w
@@ -502,7 +437,7 @@ def concentration_structure(
     weights: str = Query(..., description="JSON slug->вес, тот же формат, что POST /api/recompute"),
     peak_frac: float = Query(0.10, ge=0.01, le=0.5, description="ТЗ п.4: топ 10% по умолчанию"),
     peak_mass_share: float = Query(0.90, ge=0.5, le=0.99, description="Парето: оставить кластеры, накрывающие эту долю массы пиков"),
-    decay_sigma_km: float = Query(10.0, gt=0, description="см. composition.decay_from_structure"),
+    decay_sigma_km: float = Query(10.0, gt=0, description="стартовое σ затухания, км (по аналогии с distance_to_city)"),
 ):
     """
     Линии концентрации между пиками (ТЗ п.5) — GeoJSON FeatureCollection:
@@ -513,12 +448,9 @@ def concentration_structure(
     реализация MST на чистом SQL сложнее и не даёт выгоды на таком объёме.
 
     decay_sigma_km возвращается в ответе как есть (не применяется здесь к
-    per-cell values) — сам per-cell расчёт (composition.decay_from_structure)
-    требует либо офлайн-прогона (ETL/run_pipeline), либо правки SQL-функции
-    tile_composition для Martin, которая рисует сами тайлы суммарного слоя —
-    её исходник вне зоны этого API-файла, встраивать вслепую не стал.
-    Здесь эндпоинт даёт пики+линии для реальной отрисовки и параметр sigma
-    для визуальной прикидки (см. фронт — кольца затухания вокруг пиков).
+    per-cell values) — сам per-cell расчёт затухания делает SQL-функция
+    tile_composition (миграция 0007): фронт передаёт эти пики/линии и sigma/beta
+    query-параметрами тайла.
     """
     try:
         weights_dict = {k: v for k, v in json.loads(weights).items() if v}

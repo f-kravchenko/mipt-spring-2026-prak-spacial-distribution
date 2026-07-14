@@ -81,34 +81,16 @@ def run_pipeline(grid, regional_value, indicator_code, mask_weights=None, masks_
     if smoothing_alpha is not None:
         composed = composition.entropy_smoothing(composed, alpha=smoothing_alpha)
 
-    # Пики считаются на итоговом (гейтированном/сглаженном) суммарном слое —
-    # после smoothing они уже учитывают контроль концентрации, а не только
-    # сырую композицию. method/top_frac/z_thresh/neighbors — из params, чтобы
-    # не плодить параметры run_pipeline; см. composition.detect_peaks.
-    peaks = composition.detect_peaks(
-        composed,
-        method=params.get('peak_method', 'percentile'),
-        top_frac=params.get('peak_top_frac', 0.05),
-        z_thresh=params.get('peak_z_thresh', 2.0),
-        neighbors=params.get('peak_neighbors'),
-    )
-
+    # Пики здесь не считаются: живой путь — percentile_cont в SQL
+    # (_AGG_SQL/_PEAK_POINTS_SQL в apps/api/app/main.py).
     values = composition.distribute_value(composed, regional_value)
     sum_preserved = composition.check_sum_preservation(values, regional_value)
 
     return {
         'masks': masks,
         'composed': composed,
-        'peaks': peaks,
         'values': values,
         'sum_preserved': sum_preserved,
         'regional_value': regional_value,
         'actual_sum': float(values.sum()),
     }
-
-
-PIPELINE_DESCRIPTION = {
-    "stages": ["1. Маски", "2. Композиция", "3. Гейтирование", "4. Сглаживание", "5. Распределение", "6. Проверка"],
-    "invariants": ["sum(cells) == regional_value"],
-    "masks_count": 10,
-}

@@ -49,12 +49,6 @@ def _load_config(path: Path = CONFIG_PATH) -> dict:
         return yaml.safe_load(f)
 
 
-def load_indicator_meta(indicator_code: str, config: dict | None = None) -> dict:
-    """-> config.yaml["indicators"][indicator_code] (или {}, если показателя нет)."""
-    cfg = config or _load_config()
-    return cfg.get("indicators", {}).get(indicator_code, {})
-
-
 def resolve_weights(indicator_code: str, indicator_meta: dict | None = None,
                      masks_to_use: list[str] | None = None,
                      config: dict | None = None) -> dict[str, float]:
@@ -73,7 +67,7 @@ def resolve_weights(indicator_code: str, indicator_meta: dict | None = None,
     industrial_budget_share = comp_cfg["industrial_budget_share"]
 
     if indicator_meta is None:
-        indicator_meta = load_indicator_meta(indicator_code, cfg)
+        indicator_meta = cfg.get("indicators", {}).get(indicator_code, {})
 
     r2 = indicator_meta.get("r2")
     category = indicator_meta.get("category", "general")

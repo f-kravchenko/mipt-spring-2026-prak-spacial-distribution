@@ -137,7 +137,7 @@ export default function App() {
   // умолчанию — это интерпретационный оверлей поверх основного слоя, должен
   // включаться осознанно, не навязываться. sigmaKm/beta — открытые параметры
   // для эмпирического подбора "на глаз", как прямо просит ТЗ; дефолт sigmaKm=10
-  // обоснован в composition.decay_from_structure (аналогия с distance_to_city).
+  // обоснован в README_part3 §8 (аналогия с distance_to_city).
   const [decay, setDecay] = useState({ enabled: false, sigmaKm: 10, beta: 0.3 });
   const decayDebounceRef = useRef(null);
   useEffect(() => () => clearTimeout(decayDebounceRef.current), []);
@@ -664,6 +664,15 @@ export default function App() {
   const selRegion = regions.find((r) => r.id === regionId);
   const active = liveComp;  // распределение всегда живое
 
+  // Легенда: три состояния (территория / РФ готова / РФ считается)
+  const rfReady = scaleMode === "russia" && globalScale?.p99 > 0;
+  const legendTitle = rfReady ? "Распределение, шкала РФ (p99 по всем регионам)"
+    : scaleMode === "russia" ? "Распределение — считаем шкалу РФ…"
+    : `Распределение${active?.value_max != null ? `, до ${fmt(active.value_max)}/ячейку` : ""}`;
+  const legendEnd = rfReady ? `≥ ${fmt(globalScale.p99)}`
+    : scaleMode === "russia" ? `${fmt(active?.value_max)} (территория)`
+    : fmt(active?.value_max);
+
   return (
     <div className="app">
       <div id="map" ref={containerRef} />
@@ -901,25 +910,9 @@ export default function App() {
 
       {active && (
         <div className="legend">
-          {scaleMode === "russia" && globalScale?.p99 > 0 ? (
-            <>
-              <div>Распределение, шкала РФ (p99 по всем регионам)</div>
-              <div className="bar" style={{ background: `linear-gradient(90deg, ${DIST_STOPS.join(", ")})` }} />
-              <div className="ends"><span>0</span><span>≥ {fmt(globalScale.p99)}</span></div>
-            </>
-          ) : scaleMode === "russia" ? (
-            <>
-              <div>Распределение — считаем шкалу РФ…</div>
-              <div className="bar" style={{ background: `linear-gradient(90deg, ${DIST_STOPS.join(", ")})` }} />
-              <div className="ends"><span>0</span><span>{fmt(active.value_max)} (территория)</span></div>
-            </>
-          ) : (
-            <>
-              <div>Распределение, {active.value_max != null ? `до ${fmt(active.value_max)}/ячейку` : ""}</div>
-              <div className="bar" style={{ background: `linear-gradient(90deg, ${DIST_STOPS.join(", ")})` }} />
-              <div className="ends"><span>0</span><span>{fmt(active.value_max)}</span></div>
-            </>
-          )}
+          <div>{legendTitle}</div>
+          <div className="bar" style={{ background: `linear-gradient(90deg, ${DIST_STOPS.join(", ")})` }} />
+          <div className="ends"><span>0</span><span>{legendEnd}</span></div>
         </div>
       )}
     </div>

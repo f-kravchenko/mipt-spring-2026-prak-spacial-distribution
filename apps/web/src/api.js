@@ -14,8 +14,6 @@ async function get(path) {
 export const fetchRegions = () => get("/api/regions");
 export const fetchIndicators = () => get("/api/indicators");
 export const fetchMasks = () => get("/api/masks");
-export const fetchCompositions = (regionId, indicator) =>
-  get(`/api/compositions?region_id=${regionId}&indicator=${indicator}`);
 
 // Автоподбор весов композиции под показатель (§9, "обоснование весов").
 // -> dict {mask.slug: вес}, сумма = 1.0. Бэкенд должен вызвать

@@ -63,11 +63,14 @@ TILES_BASE_URL=http://localhost:3000 \
 | Метод | Назначение |
 |---|---|
 | `GET /health` | проверка живости + коннект к БД |
-| `GET /api/config` | базовый URL тайлов для фронта |
 | `GET /api/regions` | регионы + bbox + число ячеек |
-| `GET /api/indicators` | показатели (эластичность, R²) |
+| `GET /api/indicators` | показатели (эластичность, R², итог по РФ) |
 | `GET /api/masks` | контракты масок (§6) + шаблон URL тайла |
-| `GET /api/compositions?region_id=&indicator=` | слои распределения + метрики + URL тайла |
+| `POST /api/recompute` | живой пересчёт распределения по весам |
+| `GET /api/default-weights?indicator=` | автоподбор весов под показатель |
+| `GET /api/mask-peaks?region_id=&mask=` | порог пиков отдельного слоя |
+| `GET /api/concentration-structure?...` | точки-пики + MST-линии (GeoJSON) |
+| `GET /api/global-scale?indicator=&weights=` | p99 по всем регионам (режим «Россия») |
 
 Swagger: `http://localhost:8000/docs`.
 

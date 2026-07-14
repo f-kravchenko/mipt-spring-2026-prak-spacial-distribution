@@ -38,25 +38,6 @@ class Mask(BaseModel):
     tile_url: str  # шаблон {z}/{x}/{y}
 
 
-class Composition(BaseModel):
-    id: int
-    region_id: int
-    indicator_code: str
-    year: int
-    label: str
-    method: str
-    weights: dict
-    smoothing_alpha: float | None = None
-    sum_preserved: bool | None = None
-    metrics: dict[str, float]
-    value_max: float | None = None  # макс. значение ячейки — для цветовой шкалы
-    tile_url: str  # шаблон {z}/{x}/{y}
-
-
-class ServiceConfig(BaseModel):
-    tiles_base_url: str
-
-
 class RecomputeRequest(BaseModel):
     region_id: int
     indicator: str
@@ -68,9 +49,8 @@ class RecomputeResult(BaseModel):
     value_max: float | None = None
     regional_value: float | None = None
     metrics: dict[str, float]
-    # Порог "пика" на суммарном слое (top 5% ячеек, см. §9 "пики на суммарном
-    # слое" / composition.detect_peaks(method="percentile", top_frac=0.05)).
-    # Уже в единицах распределения (масштабирован тем же rv/total, что и
+    # Порог "пика" на суммарном слое (top 5% ненулевых ячеек, percentile_cont
+    # в _AGG_SQL). Уже в единицах распределения (масштабирован тем же rv/total, что и
     # value_max) — фронт сравнивает ["get","value"] >= peak_threshold в
     # MapLibre-выражении, отдельно считать пики на фронте не нужно.
     peak_threshold: float | None = None
