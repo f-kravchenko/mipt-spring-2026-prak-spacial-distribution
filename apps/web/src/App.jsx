@@ -779,6 +779,13 @@ export default function App() {
                   onClick={() => runRecompute(weights)}>
                   {computing ? "Пересчёт…" : "Пересчитать"}
                 </button>
+                {!computing && !liveComp && (
+                  <div className="sub" style={{ marginTop: 8, marginBottom: 0, color: "var(--signal-bad)" }}>
+                    {Object.values(weights).some((v) => v > 0)
+                      ? "Пересчёт не удался — проверьте доступность API."
+                      : "Все маски выключены — распределение не определено. Включите хотя бы одну маску или нажмите «сброс»: сумма по ячейкам всегда равна показателю региона, поэтому карта не «остывает» от нулевых весов, а исчезает."}
+                  </div>
+                )}
               </div>
 
               {contract && <MaskContract m={contract} onClose={() => setContractSlug(null)} />}
