@@ -368,37 +368,65 @@ export default function App() {
     }
   };
 
+  // Настройка весов живёт ОТДЕЛЬНО у каждого показателя: слайдеры/чекбоксы/
+  // пресет, выставленные для показателя A, не теряются при переключении на B
+  // и восстанавливаются при возврате. Ключ — код показателя.
+  const savedByIndicatorRef = useRef({}); // indicator -> {presetId, weights}
+  const indicatorRef = useRef(indicator);
+  indicatorRef.current = indicator;
+  const saveTuning = (w, pid) => {
+    if (indicatorRef.current)
+      savedByIndicatorRef.current[indicatorRef.current] = { presetId: pid, weights: w };
+  };
+
   const selectPreset = async (id) => {
     setPresetId(id);
     clearTimeout(weightDebounceRef.current);
     if (id === AUTO_PRESET_ID) {
       const w = await fetchDefaultWeightsSafe();
       setWeights(w);
+      saveTuning(w, id);
       runRecompute(w);
       return;
     }
     const p = PRESETS.find((x) => x.id === id) || PRESETS[0];
     const w = fullWeights(p.weights);
     setWeights(w);
+    saveTuning(w, id);
     runRecompute(w);  // пресет — явное действие, считаем сразу
   };
 
-  // Автопересчёт при смене региона/показателя. Для пресета "Автоподбор" веса
-  // зависят от показателя (r2/category) — переспрашиваем их у бэкенда, а не
-  // просто гоняем recompute со старыми весами (иначе после смены показателя
-  // на экране остались бы веса, посчитанные под другой r2/category —
-  // несоответствие методологии, которую мы только что ввели).
+  // Сброс = обнуление всех весов (не возврат к пресету): чистый лист, маски
+  // включаются заново чекбоксами/пресетом. recompute с нулями вернёт 400 ->
+  // на карте пусто + сообщение "все маски выключены" (см. под кнопкой).
+  const resetWeights = () => {
+    clearTimeout(weightDebounceRef.current);
+    const zeros = fullWeights({});
+    setWeights(zeros);
+    saveTuning(zeros, presetId);
+    runRecompute(zeros);
+  };
+
+  // Автопересчёт при смене региона/показателя. Если у показателя есть
+  // сохранённая настройка — восстанавливаем её; иначе для "Автоподбора"
+  // переспрашиваем веса у бэкенда (они зависят от r2/category показателя).
   const wRef = useRef(weights);
   wRef.current = weights;
   const presetRef = useRef(presetId);
   presetRef.current = presetId;
   useEffect(() => {
     if (regionId == null || !indicator) return;
-    if (presetRef.current === AUTO_PRESET_ID) {
+    const saved = savedByIndicatorRef.current[indicator];
+    if (saved) {
+      setPresetId(saved.presetId);
+      setWeights(saved.weights);
+      runRecompute(saved.weights);
+    } else if (presetRef.current === AUTO_PRESET_ID) {
       selectPreset(AUTO_PRESET_ID);
     } else {
       runRecompute(wRef.current);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [regionId, indicator]);
 
   // Слой распределения (низ) + hover-тултип по ячейке. Источник — живой
@@ -640,6 +668,7 @@ export default function App() {
   const setWeightLive = (slug, v) => {
     setWeights((w) => {
       const next = { ...w, [slug]: v };
+      saveTuning(next, presetRef.current);
       clearTimeout(weightDebounceRef.current);
       weightDebounceRef.current = setTimeout(() => runRecompute(next), WEIGHT_DEBOUNCE_MS);
       return next;
@@ -737,7 +766,8 @@ export default function App() {
               <div className="weights">
                 <div className="weights-head">
                   <span>вес маски в составе · сумма сохраняется</span>
-                  <span className="reset" onClick={() => selectPreset(presetId)}>сброс</span>
+                  <span className="reset" title="Обнулить все веса (чистый лист)"
+                    onClick={resetWeights}>сброс</span>
                 </div>
                 {masks.map((m) => {
                   const w = weights[m.slug] ?? 0;
@@ -783,7 +813,7 @@ export default function App() {
                   <div className="sub" style={{ marginTop: 8, marginBottom: 0, color: "var(--signal-bad)" }}>
                     {Object.values(weights).some((v) => v > 0)
                       ? "Пересчёт не удался — проверьте доступность API."
-                      : "Все маски выключены — распределение не определено. Включите хотя бы одну маску или нажмите «сброс»: сумма по ячейкам всегда равна показателю региона, поэтому карта не «остывает» от нулевых весов, а исчезает."}
+                      : "Все маски выключены — распределение не определено. Включите маски чекбоксами или выберите пресет: сумма по ячейкам всегда равна показателю региона, поэтому карта не «остывает» от нулевых весов, а исчезает."}
                   </div>
                 )}
               </div>
