@@ -711,6 +711,11 @@ export default function App() {
           <div>Распределение, {active.value_max != null ? `до ${fmt(active.value_max)}/ячейку` : ""}</div>
           <div className="bar" style={{ background: `linear-gradient(90deg, ${DIST_STOPS.join(", ")})` }} />
           <div className="ends"><span>0</span><span>{fmt(active.value_max)}</span></div>
+          {structure && (
+            <div style={{ marginTop: 6, fontSize: 11 }}>
+              Пиков концентрации: <b>{structure.features.filter((f) => f.properties.kind === "peak").length}</b>
+            </div>
+          )}
           {active.metrics && <Metrics comp={active} />}
         </div>
       )}
