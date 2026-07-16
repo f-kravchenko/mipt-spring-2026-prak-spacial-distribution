@@ -604,8 +604,6 @@ export default function App() {
                 </button>
                 {!liveComp && <div className="sub">пересчёт…</div>}
               </div>
-
-              {active && active.metrics && <Metrics comp={active} />}
             </div>
 
             <div className="section">
@@ -630,49 +628,6 @@ export default function App() {
               </div>
             </div>
 
-            <div className="section">
-              <label>Затухание от пиков (ТЗ п.6)</label>
-              <div className="weights">
-                <div className="mask-row" style={{ border: "none", padding: "0 0 6px" }}>
-                  <div className="head">
-                    <input
-                      type="checkbox"
-                      checked={decay.enabled}
-                      onChange={() => setDecay((d) => ({ ...d, enabled: !d.enabled }))}
-                    />
-                    <span
-                      className="title"
-                      onClick={() => setDecay((d) => ({ ...d, enabled: !d.enabled }))}
-                    >
-                      Показать зону затухания
-                    </span>
-                  </div>
-                </div>
-                {decay.enabled && (
-                  <>
-                    <div className="wrow">
-                      <span className="wname">σ, км (радиус влияния)</span>
-                      <input type="range" min="1" max="30" step="1"
-                        value={decay.sigmaKm}
-                        onChange={(e) => setDecay((d) => ({ ...d, sigmaKm: Number(e.target.value) }))} />
-                      <span className="wval">{decay.sigmaKm}</span>
-                    </div>
-                    <div className="wrow">
-                      <span className="wname">вклад в цвет слоя</span>
-                      <input type="range" min="0" max="1" step="0.05"
-                        value={decay.beta}
-                        onChange={(e) => setDecay((d) => ({ ...d, beta: Number(e.target.value) }))} />
-                      <span className="wval">{decay.beta.toFixed(2)}</span>
-                    </div>
-                    <div className="sub" style={{ marginTop: 6, marginBottom: 0 }}>
-                      Отправная точка σ=10 км — по аналогии с «Близость к городам»
-                      (та же логика затухания). Крути и сверяй визуально с реальным
-                      расположением городов/дорог на карте.
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
           </div>
         )}
       </div>
@@ -733,10 +688,6 @@ export default function App() {
                     {m.is_baseline && <span className="badge">baseline</span>}
                     <span className="info" title="Контракт маски" onClick={() => setContractSlug(m.slug)}>i</span>
                   </div>
-                  {st.visible && (
-                    <input type="range" min="0" max="1" step="0.05" value={st.opacity}
-                      onChange={(e) => setOpacity(m.slug, Number(e.target.value))} />
-                  )}
                 </div>
               );
             })}
@@ -760,6 +711,7 @@ export default function App() {
           <div>Распределение, {active.value_max != null ? `до ${fmt(active.value_max)}/ячейку` : ""}</div>
           <div className="bar" style={{ background: `linear-gradient(90deg, ${DIST_STOPS.join(", ")})` }} />
           <div className="ends"><span>0</span><span>{fmt(active.value_max)}</span></div>
+          {active.metrics && <Metrics comp={active} />}
         </div>
       )}
     </div>

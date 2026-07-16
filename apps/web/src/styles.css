@@ -155,5 +155,5 @@ select { width: 100%; padding: 7px; border: 1px solid var(--panel-border); borde
 .locator-map .maplibregl-ctrl-attrib { display: none; }
 
 .legend { position: absolute; bottom: 20px; right: 20px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 8px; padding: 10px 12px; font-size: 11px; box-shadow: 0 2px 8px rgba(0,0,0,.1); z-index: 4; }
-.legend .bar { height: 10px; width: 160px; border-radius: 3px; margin: 4px 0; }
+.legend .bar { height: 10px; width: 200px; border-radius: 3px; margin: 4px 0; }
 .legend .ends { display: flex; justify-content: space-between; color: var(--muted); }
