@@ -577,14 +577,7 @@ export default function App() {
             </div>
 
             <div className="section">
-              <label>Пресет весов</label>
-              <select value={presetId} onChange={(e) => selectPreset(e.target.value)}>
-                <option value={AUTO_PRESET_ID}>Автоподбор (по показателю)</option>
-                {PRESETS.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-
+              <label>Веса масок</label>
               <div className="weights">
                 <div className="weights-head">
                   <span>вес маски в составе · сумма сохраняется</span>
