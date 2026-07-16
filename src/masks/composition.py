@@ -173,6 +173,8 @@ def detect_peaks(composed, method="percentile", top_frac=0.05, z_thresh=2.0, nei
         if positive.size == 0:
             # все ячейки нулевые — пиков нет
             return np.zeros(n, dtype=bool)
+        if positive.std() < 0.01 * positive.mean():
+            return np.zeros(n, dtype=bool)
         k = max(1, int(round(positive.size * top_frac)))
         threshold = np.sort(positive)[::-1][k - 1]
         # threshold > 0 по построению — нулевые ячейки не проходят

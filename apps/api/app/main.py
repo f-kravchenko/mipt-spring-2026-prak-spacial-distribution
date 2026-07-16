@@ -154,7 +154,11 @@ def mask_peaks(
     regression); для остальных не передаётся, mcv.indicator_code = ''.
     """
     sql = text("""
-        SELECT percentile_cont(:p) WITHIN GROUP (ORDER BY mcv.weight) AS threshold
+        SELECT CASE
+            WHEN stddev(mcv.weight) < 0.01 * NULLIF(avg(mcv.weight), 0)
+            THEN NULL
+            ELSE percentile_cont(:p) WITHIN GROUP (ORDER BY mcv.weight)
+        END AS threshold
         FROM mask_cell_value mcv
         JOIN grid_cell gc ON gc.id = mcv.cell_id
         JOIN mask m ON m.id = mcv.mask_id
@@ -298,7 +302,11 @@ _AGG_SQL = text("""
     ),
     peak AS (
         -- по ненулевым ячейкам — см. комментарий в _PEAK_POINTS_SQL
-        SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY raw) AS p95
+        SELECT CASE
+            WHEN stddev(raw) < 0.01 * NULLIF(avg(raw), 0)
+            THEN NULL
+            ELSE percentile_cont(0.95) WITHIN GROUP (ORDER BY raw)
+        END AS p95
         FROM cell WHERE raw > 0
     )
     SELECT a.n AS n, a.s AS total, a.mx AS rawmax, g.g AS gini, top.t10 AS t10,
@@ -376,7 +384,11 @@ _PEAK_POINTS_SQL = text("""
         -- Порог только по ненулевым ячейкам: в разреженном регионе перцентиль
         -- по всем ячейкам схлопывается в 0, и "пиком" становится любая
         -- ненулевая ячейка в окружении нулей. threshold > 0 по построению.
-        SELECT percentile_cont(1 - :frac) WITHIN GROUP (ORDER BY raw) AS t
+        SELECT CASE
+            WHEN stddev(raw) < 0.01 * NULLIF(avg(raw), 0)
+            THEN NULL
+            ELSE percentile_cont(1 - :frac) WITHIN GROUP (ORDER BY raw)
+        END AS t
         FROM cell WHERE raw > 0
     ),
     peak_cells AS (
