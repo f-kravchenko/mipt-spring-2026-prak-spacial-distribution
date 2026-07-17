@@ -219,13 +219,32 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scaleMode, indicator, liveComp]);
 
-  // Домен цветовой шкалы распределения: максимум территории или фиксированный
-  // p99 по всем регионам (режим "Россия"). Считается на уровне рендера — его
-  // используют и эффект создания слоя, и эффект живой перекраски ниже.
+  // Шкала цвета — дивергентная вокруг "базовой концентрации": base — значение
+  // ячейки при РАВНОМЕРНОМ размазывании показателя (rv / число ячеек).
+  // Линейная шкала 0..max на скошенном распределении даёт "всё синее +
+  // крошечные красные пики" (95% ячеек в нижней десятой диапазона); шкала
+  // в кратных базы (коэффициент локализации, LQ = value/base) показывает
+  // и разрежение (LQ<1, холодное), и градации концентрации (лог-ступени
+  // 4x/16x, тёплое). Жёлтая середина RdYlBu = ровно базовый уровень.
+  // Территория: база своего региона; Россия: общая база по всем регионам
+  // (base_cell из /api/global-scale) — цвета сопоставимы между регионами.
+  const LQ_MULTS = [0, 0.5, 1, 4, 16]; // множители базы для DIST_STOPS
+  const selRegionCells = regions.find((r) => r.id === regionId)?.cell_count ?? 0;
+  const territoryBase = liveComp?.regional_value > 0 && selRegionCells > 0
+    ? liveComp.regional_value / selRegionCells : null;
+  const distBase = scaleMode === "russia" && globalScale?.base_cell > 0
+    ? globalScale.base_cell : territoryBase;
   const distVmax = liveComp?.value_max > 0 ? liveComp.value_max : 1;
-  const distScaleMax = scaleMode === "russia" && globalScale?.p99 > 0 ? globalScale.p99 : distVmax;
-  const distFillColor = (max) => ["interpolate", ["linear"], ["get", "value"],
-    ...DIST_STOPS.flatMap((c, i) => [max * i / (DIST_STOPS.length - 1), c])];
+  // для тултипа: читается из хендлера hover через ref, чтобы смена режима
+  // шкалы не попадала в зависимости эффекта создания слоя (не пересоздавать
+  // источник ради подписи)
+  const distBaseRef = useRef(null);
+  distBaseRef.current = distBase;
+  const distFillColor = (base) => ["interpolate", ["linear"], ["get", "value"],
+    ...(base > 0
+      ? LQ_MULTS.flatMap((m, i) => [base * m, DIST_STOPS[i]])
+      // фолбэк, пока база не готова: старая линейная шкала 0..vmax
+      : DIST_STOPS.flatMap((c, i) => [distVmax * i / (DIST_STOPS.length - 1), c]))];
 
   // Переключение Территория/Россия меняет ТОЛЬКО paint-свойство готового слоя
   // (setPaintProperty — мгновенная перекраска уже загруженных тайлов).
@@ -234,9 +253,9 @@ export default function App() {
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady || !map.getLayer("dist-fill")) return;
-    map.setPaintProperty("dist-fill", "fill-color", distFillColor(distScaleMax));
+    map.setPaintProperty("dist-fill", "fill-color", distFillColor(distBase));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapReady, distScaleMax]);
+  }, [mapReady, distBase]);
 
   useEffect(() => {
     const el = panelRef.current;
@@ -485,13 +504,13 @@ export default function App() {
     // maxzoom 13: дальше maplibre переиспользует (overzoom) тайлы — сетка 1 км,
     // мельче детали нет, лишних запросов на z14+ не делаем.
     map.addSource("dist", { type: "vector", tiles: [url], minzoom: 0, maxzoom: 13 });
-    // Домен шкалы (distScaleMax) намеренно берётся замыканием, а не через
-    // зависимости эффекта: его живая смена обрабатывается setPaintProperty
+    // База шкалы (distBase) намеренно берётся замыканием, а не через
+    // зависимости эффекта: её живая смена обрабатывается setPaintProperty
     // выше, пересоздание источника не нужно.
     addOrdered(map, ranks, {
       id: "dist-fill", type: "fill", source: "dist", "source-layer": "distribution",
       paint: {
-        "fill-color": distFillColor(distScaleMax),
+        "fill-color": distFillColor(distBase),
         "fill-opacity": 0.85,
       },
     }, RANK.dist);
@@ -527,6 +546,8 @@ export default function App() {
       map.getCanvas().style.cursor = "pointer";
       const unit = indMeta?.unit ? ` ${indMeta.unit}` : "";
       const rows = [`Абсолютно: <b>${fmt(v)}</b>${unit}`];
+      if (distBaseRef.current > 0)
+        rows.push(`Концентрация: ×${fmt(v / distBaseRef.current)} базовой`);
       if (dist.regional_value > 0)
         rows.push(`Доля территории: ${fmt((v / dist.regional_value) * 100)}%`);
       if (indMeta?.national_total > 0)
@@ -719,14 +740,15 @@ export default function App() {
   const selRegion = regions.find((r) => r.id === regionId);
   const active = liveComp;  // распределение всегда живое
 
-  // Легенда: три состояния (территория / РФ готова / РФ считается)
-  const rfReady = scaleMode === "russia" && globalScale?.p99 > 0;
-  const legendTitle = rfReady ? "Распределение, шкала РФ (p99 по всем регионам)"
-    : scaleMode === "russia" ? "Распределение — считаем шкалу РФ…"
-    : `Распределение${active?.value_max != null ? `, до ${fmt(active.value_max)}/ячейку` : ""}`;
-  const legendEnd = rfReady ? `≥ ${fmt(globalScale.p99)}`
-    : scaleMode === "russia" ? `${fmt(active?.value_max)} (территория)`
-    : fmt(active?.value_max);
+  // Легенда: шкала в кратных базовой концентрации (base = показатель /
+  // число ячеек — значение ячейки при равномерном размазывании). Жёлтая
+  // середина = ×1 базы; тёплые ступени лог-кратные (×4, ≥×16).
+  const rfReady = scaleMode === "russia" && globalScale?.base_cell > 0;
+  const legendTitle = rfReady
+    ? `Концентрация к базе РФ (${fmt(globalScale.base_cell)}/ячейку)`
+    : scaleMode === "russia" ? "Распределение — считаем базу РФ…"
+    : `Концентрация к базе территории${distBase > 0 ? ` (${fmt(distBase)}/ячейку)` : ""}`;
+  const legendMults = ["0", "×0.5", "×1", "×4", "≥×16"];
 
   return (
     <div className="app">
@@ -910,7 +932,7 @@ export default function App() {
         <div className="legend">
           <div>{legendTitle}</div>
           <div className="bar" style={{ background: `linear-gradient(90deg, ${DIST_STOPS.join(", ")})` }} />
-          <div className="ends"><span>0</span><span>{fmt(active.value_max)}</span></div>
+          <div className="ends">{legendMults.map((m) => <span key={m}>{m}</span>)}</div>
           {structure && (
             <div style={{ marginTop: 6, fontSize: 11 }}>
               Пиков концентрации: <b>{structure.features.filter((f) => f.properties.kind === "peak").length}</b>

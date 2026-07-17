@@ -324,9 +324,14 @@ _GLOBAL_SCALE_SQL = text("""
         SELECT cell.raw / NULLIF(tot.total, 0) * rv.rv AS v
         FROM cell JOIN tot USING (region_id) JOIN rv USING (region_id)
     )
-    SELECT percentile_cont(0.99) WITHIN GROUP (ORDER BY v) AS p99,
-           max(v) AS vmax, count(*) AS n
-    FROM vals WHERE v > 0
+    SELECT (SELECT percentile_cont(0.99) WITHIN GROUP (ORDER BY v)
+            FROM vals WHERE v > 0) AS p99,
+           (SELECT max(v) FROM vals) AS vmax,
+           (SELECT count(*) FROM cell) AS n,
+           -- "базовая концентрация" по всем загруженным регионам: значение
+           -- ячейки при РАВНОМЕРНОМ размазывании (Σ показателей / Σ ячеек,
+           -- нули включены) — точка отсчёта дивергентной шкалы (LQ = v/base)
+           (SELECT sum(rv) FROM rv) / NULLIF((SELECT count(*) FROM cell), 0) AS base_cell
 """)
 
 
@@ -364,6 +369,7 @@ def global_scale(
         "p99": float(row["p99"]),
         "value_max": float(row["vmax"]),
         "cells": int(row["n"]),
+        "base_cell": float(row["base_cell"]) if row["base_cell"] is not None else None,
         "national_total": float(national) if national is not None else None,
     }
 
