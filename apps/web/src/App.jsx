@@ -42,11 +42,34 @@ const MASK_C0 = "#f7fbff", MASK_C1 = "#08306b"; // синяя: вес маски
 // многоступенчатая рампа (ColorBrewer RdYlBu, перевёрнутая).
 const DIST_STOPS = ["#4575b4", "#91bfdb", "#ffffbf", "#fc8d59", "#d73027"];
 
-// Self-contained подложка: пустой фон. Без внешних тайлов (demotiles и т.п.).
-const BASE_STYLE = {
+// Подложка мини-карты (локатора): пустой фон, без внешних тайлов — это
+// маленький обзорный виджет, детальная подложка ему не нужна и не нужен
+// лишний сетевой запрос на каждый рендер.
+const LOCATOR_STYLE = {
   version: 8,
   sources: {},
   layers: [{ id: "bg", type: "background", paint: { "background-color": "#dbe6f0" } }],
+};
+
+// Подложка главной карты: светлый растр CARTO (без API-ключа, публичный CDN).
+// light_nolabels — без подписей: они бы спорили с подписями городов
+// (city-circle попап) и общей палитрой данных.
+const MAIN_STYLE = {
+  version: 8,
+  sources: {
+    "carto-basemap": {
+      type: "raster",
+      tiles: ["https://basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}@2x.png"],
+      tileSize: 256,
+      maxzoom: 20,
+      attribution:
+        '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>',
+    },
+  },
+  layers: [
+    { id: "bg", type: "background", paint: { "background-color": "#dbe6f0" } },
+    { id: "basemap", type: "raster", source: "carto-basemap" },
+  ],
 };
 const RF_BOUNDS = [[18, 40], [180, 82]]; // вид всей РФ (для мини-карты), без хвоста за 180°
 
@@ -227,13 +250,12 @@ export default function App() {
   useEffect(() => {
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: BASE_STYLE,
+      style: MAIN_STYLE,
       center: [95, 64],
       zoom: 2.2,
-      // Подложка самодостаточная (без OSM/CARTO), данные свои — кнопка
-      // атрибуции ⓘ не нужна. ВАЖНО: если вернёте внешнюю подложку
-      // (OSM/CARTO), атрибуцию обязательно вернуть — требование лицензии.
-      attributionControl: false,
+      // Подложка CARTO/OSM -> атрибуция обязательна (лицензия ODbL);
+      // compact — свёрнута в кнопку (i), не занимает угол строкой.
+      attributionControl: { compact: true },
     });
     map.addControl(new maplibregl.NavigationControl());
     window.__map = map; // отладка из консоли: getPaintProperty, queryRenderedFeatures
@@ -255,7 +277,7 @@ export default function App() {
     // Мини-карта (локатор): вся РФ, выбранный регион залит цветом. Зумится.
     const locator = new maplibregl.Map({
       container: locatorContainerRef.current,
-      style: BASE_STYLE,
+      style: LOCATOR_STYLE,
       bounds: RF_BOUNDS,
       fitBoundsOptions: { padding: 6 },
       attributionControl: false,
