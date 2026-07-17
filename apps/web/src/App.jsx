@@ -78,6 +78,33 @@ const RF_BOUNDS = [[18, 40], [180, 82]]; // вид всей РФ (для мин�
 // Google Maps при перетаскивании — без обязательного нажатия кнопки.
 const WEIGHT_DEBOUNCE_MS = 400;
 
+// ---- Персистентность состояния (localStorage + URL) ----
+// Последнее состояние переживает перезагрузку страницы: URL-параметры
+// (?region=&indicator=&scale=) имеют приоритет над localStorage — ссылкой
+// можно делиться, она открывает ровно то же представление. Остальные
+// настройки (веса по показателям, пики, затухание, слои) — в localStorage
+// под версионным ключом: смена формата в будущем не ломает старые записи
+// (чужая версия просто игнорируется). Живые данные (recompute/structure)
+// не сохраняются — пересчитываются по восстановленным настройкам.
+const STORAGE_KEY = "deaggr:state:v1";
+
+function loadInitialState() {
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+  } catch { /* приватный режим/запрет storage — работаем без памяти */ }
+  const url = new URLSearchParams(window.location.search);
+  const urlScale = url.get("scale");
+  return {
+    ...saved,
+    regionId: Number(url.get("region")) || saved.regionId || null,
+    indicator: url.get("indicator") || saved.indicator || null,
+    scaleMode: urlScale === "russia" || urlScale === "territory"
+      ? urlScale
+      : (saved.scaleMode === "russia" ? "russia" : "territory"),
+  };
+}
+
 function fmt(x) {
   if (x == null) return "—";
   const a = Math.abs(x);
@@ -116,6 +143,10 @@ function dropLayer(map, ranks, layerId, sourceId) {
 }
 
 export default function App() {
+  // Восстановленное состояние (URL > localStorage > дефолты) — читается один
+  // раз при монтировании, до первого автопересчёта.
+  const initState = useRef(loadInitialState()).current;
+
   const mapRef = useRef(null);
   const containerRef = useRef(null);
   const ranks = useRef({}); // layerId -> ранг (для упорядоченной вставки)
@@ -135,8 +166,8 @@ export default function App() {
   const [contractSlug, setContractSlug] = useState(null);
   // Города по умолчанию скрыты — это справочный оверлей для визуальной сверки
   // распределения, а не часть результата; включаются в панели слоёв.
-  const [showCities, setShowCities] = useState(false);
-  const [showRoads, setShowRoads] = useState(true);
+  const [showCities, setShowCities] = useState(initState.showCities ?? false);
+  const [showRoads, setShowRoads] = useState(initState.showRoads ?? true);
 
   // Распределение всегда считается живьём по весам; пресет — стартовый набор весов.
   const [presetId, setPresetId] = useState(AUTO_PRESET_ID);
@@ -161,16 +192,16 @@ export default function App() {
   // включаться осознанно, не навязываться. sigmaKm/beta — открытые параметры
   // для эмпирического подбора "на глаз", как прямо просит ТЗ; дефолт sigmaKm=10
   // обоснован в README_part3 §8 (аналогия с distance_to_city).
-  const [decay, setDecay] = useState({ enabled: false, sigmaKm: 10, beta: 0.3 });
+  const [decay, setDecay] = useState({ enabled: false, sigmaKm: 10, beta: 0.3, ...initState.decay });
   const decayDebounceRef = useRef(null);
   useEffect(() => () => clearTimeout(decayDebounceRef.current), []);
 
   // Контур ячеек-пиков (топ-5%) на суммарном слое и слоях масок. Выключение —
   // через setLayoutProperty(visibility), НЕ через пересоздание слоёв (см.
   // урок с переключателем шкалы: пересоздание источника перезагружает тайлы).
-  const [showPeaks, setShowPeaks] = useState(true);
+  const [showPeaks, setShowPeaks] = useState(initState.showPeaks ?? true);
   // Фиолетовые точки-пики и рёбра MST (структура концентрации) — тем же приёмом.
-  const [showStructure, setShowStructure] = useState(true);
+  const [showStructure, setShowStructure] = useState(initState.showStructure ?? true);
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
@@ -188,7 +219,7 @@ export default function App() {
   // Правило Парето для пиков концентрации: доля массы пиковых ячеек, которую
   // накрывают сильнейшие кластеры (дефолт 0.90 — Парето-90). Живой слайдер с
   // debounce: перезапрашивается только structure, не весь recompute.
-  const [peakShare, setPeakShare] = useState(0.90);
+  const [peakShare, setPeakShare] = useState(initState.peakShare ?? 0.90);
   const shareDebounceRef = useRef(null);
   useEffect(() => () => clearTimeout(shareDebounceRef.current), []);
 
@@ -198,7 +229,7 @@ export default function App() {
   // одинаковое абсолютное значение показателя, при переключении территории
   // шкала не меняется. Значение ячейки одно и то же (cell_abs через
   // региональный показатель) — селектор меняет только окраску и подписи.
-  const [scaleMode, setScaleMode] = useState("territory");
+  const [scaleMode, setScaleMode] = useState(initState.scaleMode);
   const [globalScale, setGlobalScale] = useState(null); // {p99, national_total}
 
   // p99 другого показателя — не наша шкала: сбрасываем, чтобы карта не красилась
@@ -326,8 +357,12 @@ export default function App() {
         setMasks(mk);
         setMaskState(Object.fromEntries(mk.map((m) => [m.slug, { visible: false, opacity: 0.7 }])));
         setWeights(Object.fromEntries(mk.map((m) => [m.slug, FALLBACK_AUTO_WEIGHTS[m.slug] ?? 0])));
-        if (rg.length) setRegionId(rg[0].id);
-        if (ind.length) setIndicator(ind[0].code);
+        // Восстановленные регион/показатель применяем только если они ещё
+        // существуют в справочниках (данные могли смениться) — иначе дефолт.
+        if (rg.length)
+          setRegionId(rg.some((r) => r.id === initState.regionId) ? initState.regionId : rg[0].id);
+        if (ind.length)
+          setIndicator(ind.some((i) => i.code === initState.indicator) ? initState.indicator : ind[0].code);
       }
     );
     return () => { map.remove(); locator.remove(); };
@@ -416,7 +451,7 @@ export default function App() {
   // Настройка весов живёт ОТДЕЛЬНО у каждого показателя: слайдеры/чекбоксы/
   // пресет, выставленные для показателя A, не теряются при переключении на B
   // и восстанавливаются при возврате. Ключ — код показателя.
-  const savedByIndicatorRef = useRef({}); // indicator -> {presetId, weights}
+  const savedByIndicatorRef = useRef(initState.savedByIndicator || {}); // indicator -> {presetId, weights}
   const indicatorRef = useRef(indicator);
   indicatorRef.current = indicator;
   const saveTuning = (w, pid) => {
@@ -473,6 +508,36 @@ export default function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [regionId, indicator]);
+
+  // Запись состояния: localStorage (debounce — не на каждый пиксель драга) +
+  // URL через replaceState (без засорения истории браузера; ссылкой можно
+  // делиться). weights в зависимостях — чтобы настройки весов по показателям
+  // (savedByIndicatorRef) тоже досохранялись после каждого изменения.
+  const persistDebounceRef = useRef(null);
+  useEffect(() => {
+    clearTimeout(persistDebounceRef.current);
+    persistDebounceRef.current = setTimeout(() => {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({
+          regionId, indicator, scaleMode,
+          savedByIndicator: savedByIndicatorRef.current,
+          peakShare, showPeaks, showStructure, decay, showCities, showRoads,
+        }));
+      } catch { /* приватный режим — просто без памяти */ }
+    }, 500);
+    return () => clearTimeout(persistDebounceRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [regionId, indicator, scaleMode, peakShare, showPeaks, showStructure,
+      decay, showCities, showRoads, weights]);
+
+  useEffect(() => {
+    if (regionId == null || !indicator) return;
+    const p = new URLSearchParams(window.location.search);
+    p.set("region", String(regionId));
+    p.set("indicator", indicator);
+    p.set("scale", scaleMode);
+    window.history.replaceState(null, "", `${window.location.pathname}?${p}`);
+  }, [regionId, indicator, scaleMode]);
 
   // Слой распределения (низ) + hover-тултип по ячейке. Источник — живой
   // пересчёт (liveComp). Хендлеры hover снимаются в cleanup эффекта, иначе
