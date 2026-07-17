@@ -169,7 +169,7 @@ export default function App() {
   const shareDebounceRef = useRef(null);
   useEffect(() => () => clearTimeout(shareDebounceRef.current), []);
 
-  // Масштаб отображения: "territory" — цвета растянуты до максимума текущей
+  // Масштаб сравнения: "territory" — цвета растянуты до максимума текущей
   // территории (видна её внутренняя структура); "russia" — шкала фиксирована
   // по всем регионам (p99 из /api/global-scale): одинаковый цвет означает
   // одинаковое абсолютное значение показателя, при переключении территории
@@ -230,6 +230,10 @@ export default function App() {
       style: BASE_STYLE,
       center: [95, 64],
       zoom: 2.2,
+      // Подложка самодостаточная (без OSM/CARTO), данные свои — кнопка
+      // атрибуции ⓘ не нужна. ВАЖНО: если вернёте внешнюю подложку
+      // (OSM/CARTO), атрибуцию обязательно вернуть — требование лицензии.
+      attributionControl: false,
     });
     map.addControl(new maplibregl.NavigationControl());
     window.__map = map; // отладка из консоли: getPaintProperty, queryRenderedFeatures
@@ -739,7 +743,7 @@ export default function App() {
             </div>
 
             <div className="section">
-              <label>Масштаб отображения</label>
+              <label>Масштаб сравнения</label>
               <div className="scale-toggle">
                 <button
                   className={scaleMode === "territory" ? "on" : ""}
@@ -755,14 +759,7 @@ export default function App() {
             </div>
 
             <details className="section fold">
-              <summary>Пресет весов</summary>
-              <select value={presetId} onChange={(e) => selectPreset(e.target.value)}>
-                <option value={AUTO_PRESET_ID}>Автоподбор (по показателю)</option>
-                {PRESETS.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-
+              <summary>Веса масок</summary>
               <div className="weights">
                 <div className="weights-head">
                   <span>вес маски в составе · сумма сохраняется</span>
@@ -772,7 +769,6 @@ export default function App() {
                 {masks.map((m) => {
                   const w = weights[m.slug] ?? 0;
                   const enabled = w > 0;
-                  const st = maskState[m.slug] || { visible: false, opacity: 0.7 };
                   return (
                     <div className="mask-row" key={m.slug}>
                       <div className="head">
@@ -782,9 +778,6 @@ export default function App() {
                         <span className="title" style={{ opacity: enabled ? 1 : 0.5 }}
                           onClick={() => toggleWeight(m.slug)}>{m.title}</span>
                         {m.is_baseline && <span className="badge">baseline</span>}
-                        <span className={"eye" + (st.visible ? " on" : "")}
-                          title="Показать маску слоем на карте"
-                          onClick={() => toggleMask(m.slug)}>&#128065;</span>
                         <span className="info" title="Контракт маски"
                           onClick={() => setContractSlug(m.slug)}>i</span>
                       </div>
@@ -795,13 +788,6 @@ export default function App() {
                           onChange={(e) => setWeightLive(m.slug, Number(e.target.value))} />
                         <span className="wval">{w.toFixed(2)}</span>
                       </div>
-                      {st.visible && (
-                        <div className="wrow" style={{ border: "none", padding: "2px 0 0" }}>
-                          <span className="wname">прозрачность слоя</span>
-                          <input type="range" min="0" max="1" step="0.05" value={st.opacity}
-                            onChange={(e) => setOpacity(m.slug, Number(e.target.value))} />
-                        </div>
-                      )}
                     </div>
                   );
                 })}
@@ -813,20 +799,13 @@ export default function App() {
                   <div className="sub" style={{ marginTop: 8, marginBottom: 0, color: "var(--signal-bad)" }}>
                     {Object.values(weights).some((v) => v > 0)
                       ? "Пересчёт не удался — проверьте доступность API."
-                      : "Все маски выключены — распределение не определено. Включите маски чекбоксами или выберите пресет: сумма по ячейкам всегда равна показателю региона, поэтому карта не «остывает» от нулевых весов, а исчезает."}
+                      : "Все маски выключены — распределение не определено. Включите маски чекбоксами: сумма по ячейкам всегда равна показателю региона, поэтому карта не «остывает» от нулевых весов, а исчезает."}
                   </div>
                 )}
               </div>
 
               {contract && <MaskContract m={contract} onClose={() => setContractSlug(null)} />}
             </details>
-
-            {active && active.metrics && (
-              <details className="section fold">
-                <summary>Метрики качества</summary>
-                <Metrics comp={active} />
-              </details>
-            )}
 
             <details className="section fold">
               <summary>
@@ -870,46 +849,6 @@ export default function App() {
                     onChange={(e) => setPeakShare(Number(e.target.value))} />
                   <span className="wval">{Math.round(peakShare * 100)}%</span>
                 </div>
-              </div>
-            </details>
-
-            <details className="section fold">
-              <summary>Затухание от пиков</summary>
-              <div className="weights">
-                <div className="mask-row" style={{ border: "none", padding: "0 0 6px" }}>
-                  <div className="head">
-                    <input
-                      type="checkbox"
-                      checked={decay.enabled}
-                      onChange={() => setDecay((d) => ({ ...d, enabled: !d.enabled }))}
-                    />
-                    <span
-                      className="title"
-                      title="σ=10 км как отправная точка — по аналогии с «Близость к городам»; подбирается визуально"
-                      onClick={() => setDecay((d) => ({ ...d, enabled: !d.enabled }))}
-                    >
-                      Показать зону затухания
-                    </span>
-                  </div>
-                </div>
-                {decay.enabled && (
-                  <>
-                    <div className="wrow">
-                      <span className="wname">σ, км (радиус влияния)</span>
-                      <input type="range" min="1" max="30" step="1"
-                        value={decay.sigmaKm}
-                        onChange={(e) => setDecay((d) => ({ ...d, sigmaKm: Number(e.target.value) }))} />
-                      <span className="wval">{decay.sigmaKm}</span>
-                    </div>
-                    <div className="wrow">
-                      <span className="wname">вклад в цвет слоя</span>
-                      <input type="range" min="0" max="1" step="0.05"
-                        value={decay.beta}
-                        onChange={(e) => setDecay((d) => ({ ...d, beta: Number(e.target.value) }))} />
-                      <span className="wval">{decay.beta.toFixed(2)}</span>
-                    </div>
-                  </>
-                )}
               </div>
             </details>
 
