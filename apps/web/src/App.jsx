@@ -600,14 +600,7 @@ export default function App() {
             </div>
 
             <div className="section">
-              <label>Пресет весов</label>
-              <select value={presetId} onChange={(e) => selectPreset(e.target.value)}>
-                <option value={AUTO_PRESET_ID}>Автоподбор (по показателю)</option>
-                {PRESETS.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-
+              <label>Веса масок</label>
               <div className="weights">
                 <div className="weights-head">
                   <span>вес маски в составе · сумма сохраняется</span>
@@ -734,6 +727,11 @@ export default function App() {
           <div>Распределение, {active.value_max != null ? `до ${fmt(active.value_max)}/ячейку` : ""}</div>
           <div className="bar" style={{ background: `linear-gradient(90deg, ${DIST_STOPS.join(", ")})` }} />
           <div className="ends"><span>0</span><span>{fmt(active.value_max)}</span></div>
+          {structure && (
+            <div style={{ marginTop: 6, fontSize: 11 }}>
+              Пиков концентрации: <b>{structure.features.filter((f) => f.properties.kind === "peak").length}</b>
+            </div>
+          )}
           {active.metrics && <Metrics comp={active} />}
         </div>
       )}
