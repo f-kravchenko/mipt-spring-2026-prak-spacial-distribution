@@ -214,7 +214,10 @@ def main():
     conn = psycopg2.connect(url)
     conn.autocommit = False
     with conn, conn.cursor() as cur:
-        cur.execute(open(MIGRATION, encoding="utf-8").read())  # tile_index (идемпотентно)
+        # Локально создаём tile_index сами (миграции ещё не накатаны); в проде
+        # файла миграций в etl-образе нет — функцию накатывает migrate-Job/initdb.
+        if os.path.exists(MIGRATION):
+            cur.execute(open(MIGRATION, encoding="utf-8").read())
         cur.execute("DELETE FROM region WHERE slug=%s", (SLUG,))
         cur.execute("INSERT INTO region (slug, name, geom) VALUES "
                     "(%s,%s, ST_Multi(ST_GeomFromText(%s,4326))) RETURNING id",

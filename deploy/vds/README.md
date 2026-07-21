@@ -135,6 +135,22 @@ changes:
 ./deploy/vds/run-etl.sh
 ```
 
+### Novosibirsk urban-environment index (ИКГС)
+
+This region is not part of the Rosstat pipeline — it has its own loader and its
+own tile function `tile_index` (migration `0010`). After the schema migration is
+applied by `deploy.sh`, load the region once:
+
+```bash
+./deploy/vds/run-etl-nso.sh
+```
+
+It ingests the 1 km grid + presence masks + roads, then restarts `tiles` so
+Martin discovers `tile_index`. Re-run it only when the index data or masks
+change. Note: adding any new PostgreSQL tile function requires restarting
+`tiles` (Martin scans functions at startup) — `run-etl-nso.sh` does this for
+`tile_index`.
+
 ## Notes
 
 - The VDS pulls from our controlled production repository.

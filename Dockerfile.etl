@@ -5,11 +5,19 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# rasterio (bundled GDAL wheel) требует системный libexpat, которого нет в slim.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libexpat1 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY etl/requirements.txt etl/requirements.txt
 RUN pip install --no-cache-dir -r etl/requirements.txt
 
 COPY src ./src
 COPY etl ./etl
+# Граница НСО для ingest_index_novosibirsk (читает apps/web/public/russia.geojson).
+# Копируем только её — весь apps/ образу не нужен.
+COPY apps/web/public/russia.geojson ./apps/web/public/russia.geojson
 
-# data/ монтируется как volume (parquet, gpkg) в рантайме.
+# data/ монтируется как volume (parquet, gpkg, pop_nso_z.tif, osm_nso*.json) в рантайме.
 CMD ["python", "-m", "etl.ingest", "--config", "etl/config.yaml"]

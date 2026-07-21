@@ -1,6 +1,8 @@
 # Зависимости только для ETL (гео-IO + запись в PostGIS).
-# Без rasterio/osmnx/sklearn/jupyter — они нужны ноутбукам, не загрузчику.
-# Всё ставится готовыми wheel'ами (fiona/pyproj/shapely везут GDAL с собой).
+# Без osmnx/sklearn/jupyter — они нужны ноутбукам, не загрузчику.
+# rasterio/scipy нужны ingest_index_novosibirsk (WorldPop по сетке ИКГС +
+# cKDTree-затухание до дорог/ж-д/ЛЭП); psycopg2-binary — copy_expert (psycopg2).
+# Всё ставится готовыми wheel'ами (fiona/pyproj/shapely/rasterio везут GDAL).
 pandas>=2.0
 numpy>=1.24
 pyarrow>=14.0
@@ -8,7 +10,11 @@ geopandas>=0.14
 shapely>=2.0
 pyogrio>=0.8
 pyproj>=3.6
+rasterio>=1.3
+affine>=2.4
+scipy>=1.10
 sqlalchemy>=2.0
 geoalchemy2>=0.14
 psycopg[binary]>=3.1
+psycopg2-binary>=2.9
 pyyaml>=6.0
