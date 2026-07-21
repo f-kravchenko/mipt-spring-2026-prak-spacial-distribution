@@ -76,14 +76,35 @@ const RF_BOUNDS = [[18, 40], [180, 82]]; // вид всей РФ (для мин�
 // Индекс качества городской среды (Минстрой, 2024) — показатель-индекс: не
 // сумма-сохраняемый, поэтому у него не пересчёт композиций (recompute), а
 // свой слой векторных тайлов tile_index (миграция 0010): регион приходит из
-// /api/regions с index_tile_url, ячейка несёт value (IDW балла) и weight
+// /api/regions с index_tile_url, ячейка несёт value (балл НП + затухание) и weight
 // (плотность). grid-машинерия (маски/пики/шкала) для него выключается.
 const INDEX_INDICATOR_NAME = "Индекс качества городской среды";
 // Балл индекса: та же «холодное→горячее» шкала (RdYlBu, синий→красный), что
 // у распределений в других регионах — низкий балл холодный, высокий горячий.
 // Домен по разбросу городов области (см. etl/ingest_index_novosibirsk.py).
 const INDEX_STOPS = DIST_STOPS;
-const INDEX_DOMAIN = [171, 223];
+// value = балл внутри контура НП (171..223), затухание вдвое/5 км вне него → до
+// ~0 в глубине области. Поэтому шкала от 0, а не от 171 (мин. балл города):
+// иначе весь ореол затухания и село схлопывались бы в один холодный цвет.
+const INDEX_DOMAIN = [0, 223];
+// Нелинейная (степенная) шкала: значения затухания скошены к 0 (95% ячеек —
+// низкие), при линейной шкале карта была бы «почти вся синяя». gamma>1 сгущает
+// цветовые стопы к низу диапазона → затухание получает больше оттенков.
+// Позиции стопов (value, цвет) считаем один раз и делим между заливкой и легендой.
+const INDEX_GAMMA = 2;
+const INDEX_COLOR_STOPS = INDEX_STOPS.map((color, i) => ({
+  color,
+  v: INDEX_DOMAIN[0] + (INDEX_DOMAIN[1] - INDEX_DOMAIN[0])
+     * Math.pow(i / (INDEX_STOPS.length - 1), INDEX_GAMMA),
+}));
+// Баллы реестра по НП (Минстрой-2024). Внутри контура value == балл города
+// (затухание 0.5^0 = 1); чуть наружу — строго меньше. Так по value отличаем
+// «курсор прямо над городом» от «ближайший город» без флага в тайле.
+const CITY_SCORE = {
+  Новосибирск: 223, Бердск: 210, Обь: 216, Искитим: 179, Куйбышев: 200,
+  Барабинск: 178, Карасук: 205, Татарск: 195, Купино: 180, Черепаново: 180,
+  Болотное: 178, Каргат: 178, Чулым: 173, Тогучин: 171,
+};
 
 // Маски присутствия индекс-региона (та же панель чекбоксов/ползунков, что у
 // других регионов). Компоненты 0..1 приходят в тайле tile_index по ячейке;
@@ -103,12 +124,16 @@ const INDEX_DEFAULT_W = Object.fromEntries(INDEX_MASKS.map((m) => [m.slug, m.w])
 // fill-opacity: пол 0.12 (сплошное покрытие, как baseline) + вклад масок,
 // нормированный на сумму весов (дефолт воспроизводит исходную смесь). Все
 // маски выкл (Σ=0) → ровный фон 0.12.
+// Пол непрозрачности: даже при нулевом «присутствии» цвет-балл должен читаться
+// (в частности value=0 — сплошной синий, а не выцветшая подложка). Присутствие
+// модулирует яркость выше пола (FLOOR..0.9), но не гасит цвет в прозрачность.
+const INDEX_OPACITY_FLOOR = 0.5;
 function buildIndexOpacity(w) {
   const slugs = INDEX_MASKS.map((m) => m.slug);
   const sum = slugs.reduce((s, k) => s + (w[k] || 0), 0);
-  if (sum <= 0) return 0.12;
+  if (sum <= 0) return INDEX_OPACITY_FLOOR;
   const terms = slugs.filter((k) => w[k] > 0).map((k) => ["*", w[k] / sum, ["get", k]]);
-  return ["interpolate", ["linear"], ["+", 0, ...terms], 0, 0.12, 1, 0.9];
+  return ["interpolate", ["linear"], ["+", 0, ...terms], 0, INDEX_OPACITY_FLOOR, 1, 0.9];
 }
 
 // Задержка автопересчёта при движении слайдера веса (мс). Достаточно, чтобы
@@ -206,6 +231,7 @@ export default function App() {
   // распределения, а не часть результата; включаются в панели слоёв.
   const [showCities, setShowCities] = useState(initState.showCities ?? false);
   const [showRoads, setShowRoads] = useState(initState.showRoads ?? true);
+  const [showBorders, setShowBorders] = useState(initState.showBorders ?? true);
 
   // Распределение всегда считается живьём по весам; пресет — стартовый набор весов.
   const [presetId, setPresetId] = useState(AUTO_PRESET_ID);
@@ -587,7 +613,7 @@ export default function App() {
         localStorage.setItem(STORAGE_KEY, JSON.stringify({
           regionId, indicator, scaleMode,
           savedByIndicator: savedByIndicatorRef.current,
-          peakShare, showPeaks, showStructure, decay, showCities, showRoads,
+          peakShare, showPeaks, showStructure, decay, showCities, showRoads, showBorders,
           indexWeights: appliedIndexW,
         }));
       } catch { /* приватный режим — просто без памяти */ }
@@ -595,7 +621,7 @@ export default function App() {
     return () => clearTimeout(persistDebounceRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [regionId, indicator, scaleMode, peakShare, showPeaks, showStructure,
-      decay, showCities, showRoads, weights, appliedIndexW]);
+      decay, showCities, showRoads, showBorders, weights, appliedIndexW]);
 
   useEffect(() => {
     if (regionId == null || !indicator) return;
@@ -771,6 +797,21 @@ export default function App() {
     }, RANK.road);
   }, [mapReady, regionId, regions, showRoads]);
 
+  // Границы НП (контур площади под баллом реестра) — статический geojson,
+  // совпадает с окрашенным ядром. Только для регион-индекса (isIndex).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    dropLayer(map, ranks, "nsk-cities-line", "nsk-cities");
+    const reg = regions.find((r) => r.id === regionId);
+    if (!reg || !reg.index_tile_url || !showBorders) return;
+    map.addSource("nsk-cities", { type: "geojson", data: "/novosibirsk_cities.geojson" });
+    addOrdered(map, ranks, {
+      id: "nsk-cities-line", type: "line", source: "nsk-cities",
+      paint: { "line-color": "#1f2d3d", "line-width": 1.2, "line-opacity": 0.85 },
+    }, RANK.road);
+  }, [mapReady, regionId, regions, showBorders]);
+
   // Города (поверх всего). Переключение не трогает другие слои.
   useEffect(() => {
     const map = mapRef.current;
@@ -816,15 +857,13 @@ export default function App() {
       paint: { "line-color": "#b7c6d6", "line-width": 1 },
     }, RANK.road);
 
-    // Непрерывная сетка 1 км (векторные тайлы tile_index): цвет = value (IDW
-    // балла), прозрачность = weight (плотность населения WorldPop + затухание к
+    // Сетка 1 км (векторные тайлы tile_index): цвет = value (балл НП по его
+    // площади + затухание), прозрачность = weight (плотность населения WorldPop + затухание к
     // городу; пол 0.12 — сплошное покрытие без дыр). fill-antialias:false —
     // без сетки швов между ячейками.
     map.addSource("nsk-index", { type: "vector", tiles: [reg.index_tile_url], minzoom: 0, maxzoom: 12 });
     const fillColor = ["interpolate", ["linear"], ["get", "value"],
-      ...INDEX_STOPS.flatMap((c, i) => [
-        INDEX_DOMAIN[0] + (INDEX_DOMAIN[1] - INDEX_DOMAIN[0]) * i / (INDEX_STOPS.length - 1), c,
-      ])];
+      ...INDEX_COLOR_STOPS.flatMap((s) => [s.v, s.color])];
     addOrdered(map, ranks, {
       id: "nsk-index-fill", type: "fill", source: "nsk-index", "source-layer": "index",
       paint: {
@@ -840,8 +879,11 @@ export default function App() {
     const onMove = (e) => {
       const p = e.features[0].properties;
       map.getCanvas().style.cursor = "pointer";
+      // курсор прямо над городом (внутри контура) → value == балл реестра;
+      // «(ближайший)» показываем только вне контура
+      const inCity = Number(p.value) >= (CITY_SCORE[p.name] ?? Infinity) - 0.5;
       hoverPopup.setLngLat(e.lngLat)
-        .setHTML(`<b>${p.name}</b> (ближайший)<br>Индекс здесь: <b>${fmt(Number(p.value))}</b> балла`)
+        .setHTML(`<b>${p.name}</b>${inCity ? "" : " (ближайший)"}<br>Индекс здесь: <b>${fmt(Number(p.value))}</b> балла`)
         .addTo(map);
     };
     const onLeave = () => { map.getCanvas().style.cursor = ""; hoverPopup.remove(); };
@@ -1017,11 +1059,13 @@ export default function App() {
             {isIndex && (
               <div className="section">
                 <div className="sub" style={{ margin: 0 }}>
-                  Непрерывная сетка 1 км (векторные тайлы, как у других
-                  регионов). Цвет — IDW-интерполяция балла 14 городов; яркость —
-                  «присутствие городской среды»: население (WorldPop) + POI и
-                  зелень (OSM) + близость к дорогам/ж-д/ЛЭП + затухание к городу.
-                  Наведите курсор — ближайший город и балл в точке.
+                  Сетка 1 км (векторные тайлы, как у других регионов). Цвет —
+                  балл реестра по всей фактической площади НП (контуры OSM), вне
+                  него — затухание вдвое каждые 5 км, при перекрытии берётся
+                  больший (доминирующий НП). Яркость — «присутствие городской
+                  среды»: население (WorldPop) + POI и зелень (OSM) + близость к
+                  дорогам/ж-д/ЛЭП + затухание к городу. Наведите курсор —
+                  ближайший город и балл в точке.
                 </div>
               </div>
             )}
@@ -1076,6 +1120,15 @@ export default function App() {
                       style={{ opacity: selRegion?.roads_tile_url ? 1 : 0.45 }}>
                       Дороги <span className="dot road" />
                       {!selRegion?.roads_tile_url && <span className="badge">нет данных</span>}
+                    </span>
+                  </div>
+                </div>
+                <div className="mask-row">
+                  <div className="head">
+                    <input type="checkbox" checked={showBorders}
+                      onChange={() => setShowBorders((v) => !v)} />
+                    <span className="title" onClick={() => setShowBorders((v) => !v)}>
+                      Границы НП
                     </span>
                   </div>
                 </div>
@@ -1229,10 +1282,10 @@ export default function App() {
       {isIndex && (
         <div className="legend">
           <div>Индекс качества городской среды, 2024 (балл)</div>
-          <div className="bar" style={{ background: `linear-gradient(90deg, ${INDEX_STOPS.join(", ")})` }} />
-          <div className="ends"><span>{INDEX_DOMAIN[0]} ниже</span><span>выше {INDEX_DOMAIN[1]}</span></div>
+          <div className="bar" style={{ background: `linear-gradient(90deg, ${INDEX_COLOR_STOPS.map((s) => `${s.color} ${((s.v - INDEX_DOMAIN[0]) / (INDEX_DOMAIN[1] - INDEX_DOMAIN[0]) * 100).toFixed(0)}%`).join(", ")})` }} />
+          <div className="ends"><span>0 · вне НП</span><span>223 · макс.</span></div>
           <div style={{ marginTop: 6, fontSize: 11 }}>
-            IDW по 14 городам · яркость = присутствие среды (население, POI, зелень, инфраструктура)
+Город — 171…223 балла (верх шкалы); вне контура затухание вдвое/5 км до 0. Яркость = присутствие среды
           </div>
         </div>
       )}

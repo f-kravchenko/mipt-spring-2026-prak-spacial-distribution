@@ -6,7 +6,9 @@ features, отдаётся векторными тайлами tile_index (ми�
 
 Индекс — не сумма, поэтому в отличие от Росстат-показателей значение ячейки
 НЕ распределяется из регионального итога. Спатиализация:
-  value  — IDW-интерполяция балла 14 городов (плавный непрерывный цвет);
+  value  — балл реестра держится по всей ФАКТИЧЕСКОЙ площади НП (контуры OSM,
+           fetch_footprints_novosibirsk.py); вне контура затухает вдвое каждые
+           5 км, при перекрытии контуров/затуханий берём max (доминирующий НП);
   weight — «присутствие» = населениеWorldPop + затухание к городу + пол
            (baseline), нормировано 0..1 (яркость; сплошное покрытие без дыр);
   name   — ближайший город (для подписи при наведении).
@@ -28,15 +30,19 @@ import os
 import numpy as np
 import psycopg2
 import rasterio
-from rasterio.features import rasterize
-from shapely.geometry import shape
+from rasterio.features import rasterize, shapes
+from shapely.geometry import Polygon, shape
+from shapely.ops import unary_union
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUSSIA = os.path.join(ROOT, "apps/web/public/russia.geojson")
 # Светлая подложка области под сеткой на фронте (см. App.jsx nsk-region).
 OUT_BORDER = os.path.join(ROOT, "apps/web/public/novosibirsk_border.geojson")
+# Контуры НП (площадь под баллом реестра) — слой «Границы НП» на фронте.
+OUT_CITIES = os.path.join(ROOT, "apps/web/public/novosibirsk_cities.geojson")
 POP_TIF = os.path.join(ROOT, "data/processed/pop_nso_z.tif")
 OSM_JSON = os.path.join(ROOT, "data/processed/osm_nso.json")  # etl/fetch_osm_novosibirsk.py
+FOOT_JSON = os.path.join(ROOT, "data/processed/osm_nso_footprint.json")  # etl/fetch_footprints_novosibirsk.py
 INFRA_JSON = os.path.join(ROOT, "data/processed/osm_nso_infra.json")  # etl/fetch_infra_novosibirsk.py
 MIGRATION = os.path.join(ROOT, "deploy/helm/spatial-masks/files/migrations/0010_tile_index.sql")
 SLUG = "novosibirsk_ikgs"
@@ -60,6 +66,7 @@ CITIES = [
     ("Тогучин",     84.4014, 55.2317, 171),
 ]
 SIGMA_KM = 15.0  # затухание «присутствия» от города
+HALF_KM = 5.0    # период полураспада балла ИКГС вне контура НП (вдвое / 5 км)
 
 
 def region_polygon():
@@ -156,22 +163,65 @@ def main():
     coslat = np.cos(np.radians(clat))
     cpop = pop[rr, cc]
 
-    # IDW балла + ближайший город + затухание к ближайшему
+    # ближайший город (подпись) + затухание «присутствия» к ближайшему
     cx = np.array([c[1] for c in CITIES]); cy = np.array([c[2] for c in CITIES])
     cs = np.array([c[3] for c in CITIES], float)
-    num = np.zeros(len(rr)); den = np.zeros(len(rr))
     dmin = np.full(len(rr), np.inf); nearest = np.zeros(len(rr), int)
-    eps = 0.7 ** 2
     for i in range(len(CITIES)):
         dx = (clon - cx[i]) * KM * coslat
         dy = (clat - cy[i]) * KM
         d2 = dx * dx + dy * dy
-        w = 1.0 / (d2 + eps)
-        num += w * cs[i]; den += w
         closer = d2 < dmin
         dmin = np.where(closer, d2, dmin)
         nearest = np.where(closer, i, nearest)
-    value = num / den
+
+    # value: балл реестра по всей фактической площади НП (контуры OSM), вне
+    # контура — затухание вдвое каждые HALF_KM, при перекрытии max (доминирующий
+    # НП). На сетке: маска-контур на город → EDT-дистанция до неё → score·0.5^(d/H).
+    from scipy.ndimage import distance_transform_edt
+    coslat0 = math.cos(math.radians(mlat))
+    masks = [np.zeros((nrow, ncol), bool) for _ in CITIES]
+    polys = json.load(open(FOOT_JSON, encoding="utf-8"))["polys"] if os.path.exists(FOOT_JSON) else []
+    for ring in polys:
+        poly = Polygon(ring)
+        if not poly.is_valid or poly.is_empty:
+            poly = poly.buffer(0)
+        if poly.is_empty:
+            continue
+        ctr = poly.centroid  # владелец кольца — ближайший город к центроиду
+        j = int(np.argmin(((cx - ctr.x) * coslat0) ** 2 + (cy - ctr.y) ** 2))
+        masks[j] |= rasterize([(poly, 1)], out_shape=(nrow, ncol), transform=transform,
+                              fill=0, all_touched=True).astype(bool)
+    # каждый город присутствует гарантированно: диск ~2 км в его точке (на случай
+    # дыр в OSM — Купино/Обь), иначе его балл вовсе не попал бы на карту.
+    for j in range(len(CITIES)):
+        rj = int((maxy - cy[j]) / dlat); cj = int((cx[j] - minx) / dlon)
+        for dr in range(-2, 3):
+            for dc in range(-2, 3):
+                r_, c_ = rj + dr, cj + dc
+                if 0 <= r_ < nrow and 0 <= c_ < ncol and dr * dr + dc * dc <= 4:
+                    masks[j][r_, c_] = True
+    value_grid = np.zeros((nrow, ncol))
+    for j in range(len(CITIES)):
+        if masks[j].any():
+            d_km = distance_transform_edt(~masks[j], sampling=(step, step))
+            value_grid = np.maximum(value_grid, cs[j] * 0.5 ** (d_km / HALF_KM))
+    value = value_grid[rr, cc]
+    print(f"контуров OSM {len(polys)}, ячеек в контурах {sum(int(m.sum()) for m in masks)}")
+
+    # Контуры НП (границы площади под баллом) → geojson для слоя «Границы НП».
+    # Векторизуем ту же маску, что держит балл — контур совпадает с окраской.
+    feats = []
+    for j, c in enumerate(CITIES):
+        if not masks[j].any():
+            continue
+        geoms = [shape(g) for g, _ in shapes(masks[j].astype("uint8"),
+                 mask=masks[j], transform=transform)]
+        feats.append({"type": "Feature",
+                      "properties": {"name": c[0], "value": c[3]},
+                      "geometry": unary_union(geoms).__geo_interface__})
+    json.dump({"type": "FeatureCollection", "features": feats},
+              open(OUT_CITIES, "w", encoding="utf-8"), ensure_ascii=False)
 
     popnorm = norm95(cpop)
     citydecay = np.exp(-dmin / (2 * SIGMA_KM ** 2))
@@ -263,7 +313,7 @@ def main():
                         "SELECT %s, NULLIF(highway,''), ST_GeomFromText(wkt,4326) FROM _rd",
                         (reg,))
     conn.close()
-    print(f"регион id={reg}, ячеек {len(rr)}, балл IDW {value.min():.0f}–{value.max():.0f}, "
+    print(f"регион id={reg}, ячеек {len(rr)}, балл {value.min():.0f}–{value.max():.0f}, "
           f"население Σ≈{int(cpop.sum()):,}, дорог {len(rlines)}")
 
 
