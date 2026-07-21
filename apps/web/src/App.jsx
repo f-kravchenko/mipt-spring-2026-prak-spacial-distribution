@@ -245,6 +245,12 @@ export default function App() {
   const [weights, setWeights] = useState({ ...FALLBACK_AUTO_WEIGHTS }); // slug -> вес
   const [liveComp, setLiveComp] = useState(null);              // {tile_url, value_max, metrics}
   const [structure, setStructure] = useState(null);             // GeoJSON: пики + линии концентрации (ТЗ п.5)
+  // Триггер сравнения «базовая (по площади)»: базовое распределение (показатель
+  // разложен равномерно по площади) не зависит от весов масок — считаем один раз
+  // на регион+показатель и держим в памяти. Переключение — смена visibility двух
+  // слоёв (без пересчёта и перезагрузки тайлов), поэтому мгновенно.
+  const [showBaseline, setShowBaseline] = useState(false);
+  const [baselineComp, setBaselineComp] = useState(null);
 
   // Веса масок присутствия индекс-региона (см. INDEX_MASKS). Отдельно от
   // weights (те — для recompute обычных регионов). indexWeights — черновик
@@ -377,10 +383,12 @@ export default function App() {
   // с ~4 с на /api/global-scale переключатель выглядел бы "не работающим".
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapReady || !map.getLayer("dist-fill")) return;
-    map.setPaintProperty("dist-fill", "fill-color", distFillColor(distBase));
+    if (!map || !mapReady) return;
+    const fc = distFillColor(distBase);
+    if (map.getLayer("dist-fill")) map.setPaintProperty("dist-fill", "fill-color", fc);
+    if (map.getLayer("dist-base-fill")) map.setPaintProperty("dist-base-fill", "fill-color", fc);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapReady, distBase]);
+  }, [mapReady, distBase, baselineComp]);
 
   useEffect(() => {
     const el = panelRef.current;
@@ -513,6 +521,21 @@ export default function App() {
       .catch(() => { if (seq === distSeqRef.current) { setLiveComp(null); setComputing(false); } });
     fetchStructureSafe(w, peakShare);
   };
+
+  // Базовое распределение (равномерно по площади) — вес только у baseline-маски.
+  // Зависит лишь от региона+показателя, не от пользовательских весов, поэтому
+  // считается один раз при их смене и кэшируется в baselineComp (в памяти).
+  const baseSeqRef = useRef(0);
+  useEffect(() => {
+    if (regions.find((r) => r.id === regionId)?.index_tile_url) { setBaselineComp(null); return; }
+    const bslug = masks.find((m) => m.is_baseline)?.slug;
+    if (regionId == null || !indicator || !bslug) { setBaselineComp(null); return; }
+    const seq = ++baseSeqRef.current;
+    recompute(regionId, indicator, { [bslug]: 1 })
+      .then((r) => { if (seq === baseSeqRef.current) setBaselineComp(r); })
+      .catch(() => { if (seq === baseSeqRef.current) setBaselineComp(null); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [regionId, indicator, regions, masks]);
 
   // Смена доли Парето перезапрашивает только пики/линии (не пересчёт слоя):
   // порог отбора кластеров — свойство отображения структуры, значения ячеек
@@ -734,6 +757,34 @@ export default function App() {
     // scaleMode/globalScale намеренно НЕ в зависимостях — см. setPaintProperty выше.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapReady, liveComp, decay, structure, indicators, indicator]);
+
+  // Слой базового распределения — постоянно на карте рядом с dist, но обычно
+  // скрыт. Триггер «Базовая» лишь переключает visibility (см. эффект ниже), тайлы
+  // обоих слоёв остаются загруженными → сравнение без пересчёта и лага.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    dropLayer(map, ranks, "dist-base-fill", "dist-base");
+    if (!baselineComp?.tile_url) return;
+    map.addSource("dist-base", { type: "vector", tiles: [baselineComp.tile_url], minzoom: 0, maxzoom: 13 });
+    addOrdered(map, ranks, {
+      id: "dist-base-fill", type: "fill", source: "dist-base", "source-layer": "distribution",
+      layout: { visibility: showBaseline ? "visible" : "none" },
+      paint: { "fill-color": distFillColor(distBase), "fill-opacity": 0.85 },
+    }, RANK.dist);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapReady, baselineComp]);
+
+  // Триггер сравнения: показываем базовый слой ВМЕСТО слоя по маскам (и прячем
+  // контур пиков — он про распределение по маскам). Мгновенно, без перерисовки.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    const vis = (id, on) => { if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", on ? "visible" : "none"); };
+    vis("dist-base-fill", showBaseline);
+    vis("dist-fill", !showBaseline);
+    vis("dist-peak-outline", !showBaseline && showPeaks);
+  }, [mapReady, showBaseline, liveComp, baselineComp, showPeaks]);
 
   // Маски (над распределением). Зависят только от своего состояния.
   // Контур пиков (ТЗ п.2) на каждом видимом слое — не только на суммарном
@@ -1168,7 +1219,22 @@ export default function App() {
                   <span className="reset" title="Обнулить все веса (чистый лист)"
                     onClick={resetWeights}>сброс</span>
                 </div>
-                {masks.map((m) => {
+                {/* Триггер сравнения: показатель разложен равномерно по площади.
+                    Клик — базовое распределение поверх, отпуск — фактическое по
+                    маскам. Переключение мгновенное (оба слоя кэшированы). */}
+                <div className="mask-row">
+                  <div className="head">
+                    <input type="checkbox" checked={showBaseline}
+                      title="Показать базовое распределение (равномерно по площади) — триггер сравнения"
+                      onChange={() => setShowBaseline((v) => !v)} />
+                    <span className="title" style={{ fontWeight: showBaseline ? 600 : 400 }}
+                      onClick={() => setShowBaseline((v) => !v)}>Базовая (по площади)</span>
+                    <span className="badge">baseline</span>
+                    <span className="info" style={{ cursor: "help" }}
+                      title={"Эталон: региональный показатель разложен РАВНОМЕРНО по площади (все ячейки равны).\nТриггер сравнения — базовое распределение вместо фактического по маскам.\nБазовое не зависит от весов и кэшируется, переключение мгновенно."}>i</span>
+                  </div>
+                </div>
+                {masks.filter((m) => !m.is_baseline).map((m) => {
                   const w = weights[m.slug] ?? 0;
                   const enabled = w > 0;
                   return (
