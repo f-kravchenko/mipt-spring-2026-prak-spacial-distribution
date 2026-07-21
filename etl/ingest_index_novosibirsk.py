@@ -67,6 +67,7 @@ CITIES = [
 ]
 SIGMA_KM = 15.0  # затухание «присутствия» от города
 HALF_KM = 5.0    # период полураспада балла ИКГС вне контура НП (вдвое / 5 км)
+CLOSE_CELLS = 3  # смыкание фрагментов застройки в сплошной контур НП (~3 км)
 
 
 def region_polygon():
@@ -178,7 +179,7 @@ def main():
     # value: балл реестра по всей фактической площади НП (контуры OSM), вне
     # контура — затухание вдвое каждые HALF_KM, при перекрытии max (доминирующий
     # НП). На сетке: маска-контур на город → EDT-дистанция до неё → score·0.5^(d/H).
-    from scipy.ndimage import distance_transform_edt
+    from scipy.ndimage import binary_closing, binary_fill_holes, distance_transform_edt
     coslat0 = math.cos(math.radians(mlat))
     masks = [np.zeros((nrow, ncol), bool) for _ in CITIES]
     polys = json.load(open(FOOT_JSON, encoding="utf-8"))["polys"] if os.path.exists(FOOT_JSON) else []
@@ -201,6 +202,12 @@ def main():
                 r_, c_ = rj + dr, cj + dc
                 if 0 <= r_ < nrow and 0 <= c_ < ncol and dr * dr + dc * dc <= 4:
                     masks[j][r_, c_] = True
+    # OSM residential — фрагментарная ткань (кварталы через улицы/реки/промзоны):
+    # на сетке 1 км это «зернистая» маска, и промежутки между кусками падают в
+    # затухание. Смыкаем в сплошную огибающую (closing ~3 км) и заливаем дыры —
+    # город становится единым пятном под баллом, а не крапом.
+    for j in range(len(CITIES)):
+        masks[j] = binary_fill_holes(binary_closing(masks[j], iterations=CLOSE_CELLS))
     value_grid = np.zeros((nrow, ncol))
     for j in range(len(CITIES)):
         if masks[j].any():
