@@ -36,6 +36,8 @@ RUSSIA = os.path.join(ROOT, "apps/web/public/russia.geojson")
 # Светлая подложка области под сеткой на фронте (см. App.jsx nsk-region).
 OUT_BORDER = os.path.join(ROOT, "apps/web/public/novosibirsk_border.geojson")
 POP_TIF = os.path.join(ROOT, "data/processed/pop_nso_z.tif")
+OSM_JSON = os.path.join(ROOT, "data/processed/osm_nso.json")  # etl/fetch_osm_novosibirsk.py
+INFRA_JSON = os.path.join(ROOT, "data/processed/osm_nso_infra.json")  # etl/fetch_infra_novosibirsk.py
 MIGRATION = os.path.join(ROOT, "deploy/helm/spatial-masks/files/migrations/0010_tile_index.sql")
 SLUG = "novosibirsk_ikgs"
 NAME = "Новосибирская область"
@@ -82,6 +84,40 @@ def cell_population(minx, maxy, dlon, dlat, nrow, ncol):
     pop = np.zeros((nrow, ncol))
     np.add.at(pop, (rr[ok], cc[ok]), a[rows, cols][ok])
     return pop
+
+
+def bin_points(pts, minx, maxy, dlon, dlat, nrow, ncol):
+    """Счётчик точек (lon,lat) по ячейкам сетки — плотность OSM-объектов."""
+    grid = np.zeros((nrow, ncol))
+    if not pts:
+        return grid
+    a = np.asarray(pts, float)
+    cc = np.floor((a[:, 0] - minx) / dlon).astype(int)
+    rr = np.floor((maxy - a[:, 1]) / dlat).astype(int)
+    ok = (cc >= 0) & (cc < ncol) & (rr >= 0) & (rr < nrow)
+    np.add.at(grid, (rr[ok], cc[ok]), 1.0)
+    return grid
+
+
+def norm95(v):
+    """Нормировка 0..1 через sqrt(v/p95) — устойчива к выбросам плотности."""
+    pos = v[v > 0]
+    ref = np.percentile(pos, 95) if pos.size else 1.0
+    return np.clip(np.sqrt(v / ref), 0, 1) if ref > 0 else np.zeros_like(v)
+
+
+def line_decay(pts, clon, clat, mlat, sigma_km):
+    """Близость к линейной инфраструктуре: exp(-d_нач/σ) до ближайшей точки
+    сети (та же форма, что в src/masks/road_network|railway|power). cKDTree в
+    локальных км, поэтому расстояние сразу в километрах."""
+    if not pts:
+        return np.zeros(len(clon))
+    from scipy.spatial import cKDTree
+    kx = KM * math.cos(math.radians(mlat))
+    a = np.asarray(pts, float)
+    tree = cKDTree(np.column_stack([a[:, 0] * kx, a[:, 1] * KM]))
+    d, _ = tree.query(np.column_stack([clon * kx, clat * KM]), k=1)
+    return np.exp(-d / sigma_km)
 
 
 def main():
@@ -137,12 +173,43 @@ def main():
         nearest = np.where(closer, i, nearest)
     value = num / den
 
-    p95 = np.percentile(cpop[cpop > 0], 95) if (cpop > 0).any() else 1.0
-    popnorm = np.clip(np.sqrt(cpop / p95), 0, 1)
+    popnorm = norm95(cpop)
     citydecay = np.exp(-dmin / (2 * SIGMA_KM ** 2))
-    # пол 0.12 (как baseline-маска у других регионов — сплошное покрытие),
-    # ярче там, где плотнее население/ближе город
-    weight = np.clip(0.12 + 0.88 * (0.7 * popnorm + 0.3 * citydecay), 0, 1)
+
+    # OSM-маски (если есть кэш etl/fetch_osm_novosibirsk.py): плотность POI
+    # (инфраструктура) и городской зелени — прокси критериев самого индекса.
+    # Есть только вокруг городов; в селе poi/green = 0, вес держат pop+decay.
+    poinorm = greennorm = np.zeros(len(rr))
+    if os.path.exists(OSM_JSON):
+        osm = json.load(open(OSM_JSON, encoding="utf-8"))
+        poi = bin_points(osm.get("poi", []), minx, maxy, dlon, dlat, nrow, ncol)
+        grn = bin_points(osm.get("green", []), minx, maxy, dlon, dlat, nrow, ncol)
+        poinorm = norm95(poi)[rr, cc]
+        greennorm = norm95(grn)[rr, cc]
+        print(f"OSM: POI={len(osm.get('poi', []))}, green={len(osm.get('green', []))}")
+    else:
+        print(f"нет {OSM_JSON} — вес без OSM (только население+затухание)")
+
+    # Линейная инфраструктура OSM (etl/fetch_infra_novosibirsk.py): близость к
+    # крупным дорогам / ж-д / ЛЭП — те же дистанционные маски, что у других
+    # регионов (road_network/railway/power), но по сетке индекса. Держим
+    # компоненты РАЗДЕЛЬНО (не сливаем) — веса выставляет пользователь ползунками.
+    road_c = rail_c = powr_c = np.zeros(len(rr))
+    if os.path.exists(INFRA_JSON):
+        inf = json.load(open(INFRA_JSON, encoding="utf-8"))
+        road_c = line_decay(inf.get("road", []), clon, clat, mlat, 5.0)
+        rail_c = line_decay(inf.get("rail", []), clon, clat, mlat, 6.0)
+        powr_c = line_decay(inf.get("power", []), clon, clat, mlat, 8.0)
+        print(f"инфраструктура: road={len(inf.get('road', []))}, "
+              f"rail={len(inf.get('rail', []))}, power={len(inf.get('power', []))} точек")
+    else:
+        print(f"нет {INFRA_JSON} — без дорожно-инфраструктурных масок")
+
+    # Компоненты масок присутствия (0..1) на ячейку — вес (яркость) собирает
+    # фронт из ползунков. value (цвет) = IDW балла, маски задают только яркость.
+    comp = {"pop": popnorm, "poi": poinorm, "green": greennorm,
+            "road": road_c, "rail": rail_c, "power": powr_c, "city": citydecay}
+    r2 = lambda a, k: round(float(a[k]), 2)
 
     conn = psycopg2.connect(url)
     conn.autocommit = False
@@ -154,6 +221,7 @@ def main():
                     (SLUG, NAME, border.wkt))
         reg = cur.fetchone()[0]
 
+        cols = list(comp)  # pop,poi,green,road,rail,power,city
         buf = io.StringIO()
         wtr = csv.writer(buf)
         for k in range(len(rr)):
@@ -161,21 +229,39 @@ def main():
             y0 = round(clat[k] - dlat / 2, 5); y1 = round(clat[k] + dlat / 2, 5)
             wkt = f"POLYGON(({x0} {y0},{x1} {y0},{x1} {y1},{x0} {y1},{x0} {y0}))"
             wtr.writerow([f"{rr[k]}_{cc[k]}", wkt, float(cpop[k]),
-                          round(float(value[k]), 2), round(float(weight[k]), 3),
-                          CITIES[nearest[k]][0]])
+                          round(float(value[k]), 2), CITIES[nearest[k]][0]]
+                         + [r2(comp[c], k) for c in cols])
         buf.seek(0)
-        cur.execute("CREATE TEMP TABLE _stg (cell_code text, wkt text, pop float8, "
-                    "value float8, weight float8, name text) ON COMMIT DROP")
+        cur.execute("CREATE TEMP TABLE _stg (cell_code text, wkt text, popcnt float8, "
+                    "value float8, name text, " + ", ".join(f"{c} float8" for c in cols) +
+                    ") ON COMMIT DROP")
         cur.copy_expert("COPY _stg FROM STDIN WITH CSV", buf)
-        cur.execute("""
+        comp_json = ", ".join(f"'{c}', {c}" for c in cols)
+        cur.execute(f"""
             INSERT INTO grid_cell (region_id, cell_code, geom, area_km2, population, features)
-            SELECT %s, cell_code, ST_Multi(ST_GeomFromText(wkt,4326)), %s, pop,
-                   jsonb_build_object('value', value, 'weight', weight, 'name', name)
+            SELECT %s, cell_code, ST_Multi(ST_GeomFromText(wkt,4326)), %s, popcnt,
+                   jsonb_build_object('value', value, 'name', name, {comp_json})
             FROM _stg
         """, (reg, step * step))
+
+        # Слой дорог НСО в таблицу road → тот же tile_road и слой «Дороги», что
+        # у других регионов (/api/regions вернёт roads_tile_url автоматически).
+        rlines = (json.load(open(INFRA_JSON, encoding="utf-8")).get("road_lines", [])
+                  if os.path.exists(INFRA_JSON) else [])
+        if rlines:
+            rbuf = io.StringIO(); rw = csv.writer(rbuf)
+            for ln in rlines:
+                coords = ",".join(f"{x} {y}" for x, y in ln["c"])
+                rw.writerow([ln.get("h") or "", f"LINESTRING({coords})"])
+            rbuf.seek(0)
+            cur.execute("CREATE TEMP TABLE _rd (highway text, wkt text) ON COMMIT DROP")
+            cur.copy_expert("COPY _rd FROM STDIN WITH CSV", rbuf)
+            cur.execute("INSERT INTO road (region_id, highway, geom) "
+                        "SELECT %s, NULLIF(highway,''), ST_GeomFromText(wkt,4326) FROM _rd",
+                        (reg,))
     conn.close()
     print(f"регион id={reg}, ячеек {len(rr)}, балл IDW {value.min():.0f}–{value.max():.0f}, "
-          f"население Σ≈{int(cpop.sum()):,}")
+          f"население Σ≈{int(cpop.sum()):,}, дорог {len(rlines)}")
 
 
 if __name__ == "__main__":

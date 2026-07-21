@@ -85,6 +85,32 @@ const INDEX_INDICATOR_NAME = "Индекс качества городской �
 const INDEX_STOPS = DIST_STOPS;
 const INDEX_DOMAIN = [171, 223];
 
+// Маски присутствия индекс-региона (та же панель чекбоксов/ползунков, что у
+// других регионов). Компоненты 0..1 приходят в тайле tile_index по ячейке;
+// вес (яркость) собирается ЗДЕСЬ выражением fill-opacity — смена веса
+// перекрашивает мгновенно, без пересчёта тайлов. slug = ключ в свойствах тайла.
+const INDEX_MASKS = [
+  { slug: "pop",   title: "Население (WorldPop)", w: 0.30 },
+  { slug: "poi",   title: "POI (OSM)",            w: 0.22 },
+  { slug: "green", title: "Зелень (OSM)",         w: 0.12 },
+  { slug: "road",  title: "Дороги (OSM)",         w: 0.125 },
+  { slug: "rail",  title: "Ж/д (OSM)",            w: 0.075 },
+  { slug: "power", title: "ЛЭП (OSM)",            w: 0.05 },
+  { slug: "city",  title: "Близость к городу",    w: 0.11 },
+];
+const INDEX_DEFAULT_W = Object.fromEntries(INDEX_MASKS.map((m) => [m.slug, m.w]));
+
+// fill-opacity: пол 0.12 (сплошное покрытие, как baseline) + вклад масок,
+// нормированный на сумму весов (дефолт воспроизводит исходную смесь). Все
+// маски выкл (Σ=0) → ровный фон 0.12.
+function buildIndexOpacity(w) {
+  const slugs = INDEX_MASKS.map((m) => m.slug);
+  const sum = slugs.reduce((s, k) => s + (w[k] || 0), 0);
+  if (sum <= 0) return 0.12;
+  const terms = slugs.filter((k) => w[k] > 0).map((k) => ["*", w[k] / sum, ["get", k]]);
+  return ["interpolate", ["linear"], ["+", 0, ...terms], 0, 0.12, 1, 0.9];
+}
+
 // Задержка автопересчёта при движении слайдера веса (мс). Достаточно, чтобы
 // не слать запрос на каждый пиксель драга, но ощущаться "живым", как в
 // Google Maps при перетаскивании — без обязательного нажатия кнопки.
@@ -186,6 +212,29 @@ export default function App() {
   const [weights, setWeights] = useState({ ...FALLBACK_AUTO_WEIGHTS }); // slug -> вес
   const [liveComp, setLiveComp] = useState(null);              // {tile_url, value_max, metrics}
   const [structure, setStructure] = useState(null);             // GeoJSON: пики + линии концентрации (ТЗ п.5)
+
+  // Веса масок присутствия индекс-региона (см. INDEX_MASKS). Отдельно от
+  // weights (те — для recompute обычных регионов). indexWeights — черновик
+  // (ползунки/чекбоксы), на карту попадает только по кнопке «Пересчитать»
+  // (appliedIndexW). Пока карта перерисовывается — кнопка неактивна.
+  const [indexWeights, setIndexWeights] = useState(initState.indexWeights || INDEX_DEFAULT_W);
+  const [appliedIndexW, setAppliedIndexW] = useState(initState.indexWeights || INDEX_DEFAULT_W);
+  const [indexComputing, setIndexComputing] = useState(false);
+  const idxPrevRef = useRef({}); // прежний вес маски для возврата по чекбоксу
+  const toggleIndexMask = (slug) => setIndexWeights((w) => {
+    const cur = w[slug] || 0;
+    if (cur > 0) { idxPrevRef.current[slug] = cur; return { ...w, [slug]: 0 }; }
+    return { ...w, [slug]: idxPrevRef.current[slug] || 0.2 };
+  });
+  const setIndexWeight = (slug, v) => setIndexWeights((w) => ({ ...w, [slug]: v }));
+  const resetIndexWeights = () =>
+    setIndexWeights(Object.fromEntries(INDEX_MASKS.map((m) => [m.slug, 0])));
+  const indexDirty = JSON.stringify(indexWeights) !== JSON.stringify(appliedIndexW);
+  const applyIndexWeights = () => {
+    if (!indexDirty) return;
+    setIndexComputing(true);           // снимется по событию карты 'idle' (эффект ниже)
+    setAppliedIndexW(indexWeights);
+  };
 
   // Левая панель — плавающая карточка (не edge-to-edge сайдбар), можно свернуть.
   // panelWidth измеряется реально (ResizeObserver), а не константой, чтобы
@@ -539,13 +588,14 @@ export default function App() {
           regionId, indicator, scaleMode,
           savedByIndicator: savedByIndicatorRef.current,
           peakShare, showPeaks, showStructure, decay, showCities, showRoads,
+          indexWeights: appliedIndexW,
         }));
       } catch { /* приватный режим — просто без памяти */ }
     }, 500);
     return () => clearTimeout(persistDebounceRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [regionId, indicator, scaleMode, peakShare, showPeaks, showStructure,
-      decay, showCities, showRoads, weights]);
+      decay, showCities, showRoads, weights, appliedIndexW]);
 
   useEffect(() => {
     if (regionId == null || !indicator) return;
@@ -780,7 +830,9 @@ export default function App() {
       paint: {
         "fill-color": fillColor,
         "fill-antialias": false,
-        "fill-opacity": ["interpolate", ["linear"], ["get", "weight"], 0.12, 0.12, 1, 0.92],
+        // яркость = вклад ПРИМЕНЁННЫХ масок; смена — эффектом ниже
+        // (setPaintProperty), поэтому appliedIndexW берётся замыканием, не в deps
+        "fill-opacity": buildIndexOpacity(appliedIndexW),
       },
     }, RANK.dist);
 
@@ -801,6 +853,26 @@ export default function App() {
       hoverPopup.remove();
     };
   }, [mapReady, regionId, regions]);
+
+  // Применение ПРИМЕНЁННЫХ весов (по кнопке «Пересчитать»): перекраска
+  // fill-opacity готового слоя (без пересоздания источника — как переключатель
+  // шкалы). Флаг indexComputing снимаем по 'idle' — когда карта дорисовалась,
+  // тогда кнопка снова активна. appliedIndexW, не indexWeights (черновик).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    // слой ещё не создан (или карта пересоздаётся) — не зависаем в «Перестройка…»
+    if (!map.getLayer("nsk-index-fill")) { setIndexComputing(false); return; }
+    map.setPaintProperty("nsk-index-fill", "fill-opacity", buildIndexOpacity(appliedIndexW));
+    // Снимаем «Перестройка…» по 'idle' (карта дорисовалась) ИЛИ по таймауту —
+    // подложка в песочнице иногда не доходит до 'idle', и без страховки кнопка
+    // залипала бы. Перекраска paint-выражением всё равно применяется мгновенно.
+    let cleared = false;
+    const done = () => { if (!cleared) { cleared = true; setIndexComputing(false); } };
+    map.once("idle", done);
+    const t = setTimeout(done, 700);
+    return () => { map.off("idle", done); clearTimeout(t); };
+  }, [mapReady, appliedIndexW]);
 
   // Линии концентрации между пиками (ТЗ п.5) + точки-пики, поверх всего
   // (RANK.structure — выше городов). Реальные GeoJSON-фичи, не векторные
@@ -947,10 +1019,67 @@ export default function App() {
                 <div className="sub" style={{ margin: 0 }}>
                   Непрерывная сетка 1 км (векторные тайлы, как у других
                   регионов). Цвет — IDW-интерполяция балла 14 городов; яркость —
-                  плотность населения (WorldPop 2020) + затухание к городу.
+                  «присутствие городской среды»: население (WorldPop) + POI и
+                  зелень (OSM) + близость к дорогам/ж-д/ЛЭП + затухание к городу.
                   Наведите курсор — ближайший город и балл в точке.
                 </div>
               </div>
+            )}
+
+            {isIndex && (
+              <details className="section fold" open>
+                <summary>Веса масок присутствия</summary>
+                <div className="weights">
+                  <div className="weights-head">
+                    <span>вклад маски в яркость</span>
+                    <span className="reset" title="Обнулить все веса"
+                      onClick={resetIndexWeights}>сброс</span>
+                  </div>
+                  {INDEX_MASKS.map((m) => {
+                    const wv = indexWeights[m.slug] ?? 0;
+                    const on = wv > 0;
+                    return (
+                      <div className="mask-row" key={m.slug}>
+                        <div className="head">
+                          <input type="checkbox" checked={on}
+                            onChange={() => toggleIndexMask(m.slug)} />
+                          <span className="title" style={{ opacity: on ? 1 : 0.5 }}
+                            onClick={() => toggleIndexMask(m.slug)}>{m.title}</span>
+                        </div>
+                        <div className="wrow" style={{ border: "none", padding: "2px 0 0" }}>
+                          <input type="range" min="0" max="1" step="0.05" disabled={!on}
+                            value={wv}
+                            onChange={(e) => setIndexWeight(m.slug, Number(e.target.value))} />
+                          <span className="wval">{wv.toFixed(2)}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <button className="recompute-btn" disabled={indexComputing || !indexDirty}
+                    onClick={applyIndexWeights}>
+                    {indexComputing ? "Перестройка…" : "Пересчитать"}
+                  </button>
+                </div>
+              </details>
+            )}
+
+            {isIndex && (
+              <details className="section fold">
+                <summary>Слои карты</summary>
+                <div className="mask-row">
+                  <div className="head">
+                    <input type="checkbox" checked={showRoads}
+                      disabled={!selRegion?.roads_tile_url}
+                      onChange={() => setShowRoads((v) => !v)} />
+                    <span className="title"
+                      onClick={() => selRegion?.roads_tile_url && setShowRoads((v) => !v)}
+                      style={{ opacity: selRegion?.roads_tile_url ? 1 : 0.45 }}>
+                      Дороги <span className="dot road" />
+                      {!selRegion?.roads_tile_url && <span className="badge">нет данных</span>}
+                    </span>
+                  </div>
+                </div>
+              </details>
             )}
 
             {!isIndex && <>
@@ -1103,7 +1232,7 @@ export default function App() {
           <div className="bar" style={{ background: `linear-gradient(90deg, ${INDEX_STOPS.join(", ")})` }} />
           <div className="ends"><span>{INDEX_DOMAIN[0]} ниже</span><span>выше {INDEX_DOMAIN[1]}</span></div>
           <div style={{ marginTop: 6, fontSize: 11 }}>
-            IDW по 14 городам · яркость = плотность населения (WorldPop)
+            IDW по 14 городам · яркость = присутствие среды (население, POI, зелень, инфраструктура)
           </div>
         </div>
       )}
