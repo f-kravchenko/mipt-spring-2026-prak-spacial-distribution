@@ -63,6 +63,10 @@ def _road_tile_url(region_id: int) -> str:
     return f"{TILES_BASE_URL}/tile_road/{{z}}/{{x}}/{{y}}?region={region_id}"
 
 
+def _index_tile_url(region_id: int) -> str:
+    return f"{TILES_BASE_URL}/tile_index/{{z}}/{{x}}/{{y}}?region={region_id}"
+
+
 @app.get("/health")
 def health():
     with engine.connect() as conn:
@@ -78,7 +82,10 @@ def regions():
                ST_XMax(r.geom) AS maxx, ST_YMax(r.geom) AS maxy,
                (SELECT count(*) FROM grid_cell g WHERE g.region_id = r.id) AS cells,
                EXISTS(SELECT 1 FROM city  c WHERE c.region_id = r.id) AS has_city,
-               EXISTS(SELECT 1 FROM road  d WHERE d.region_id = r.id) AS has_road
+               EXISTS(SELECT 1 FROM road  d WHERE d.region_id = r.id) AS has_road,
+               -- индексный регион: его ячейки несут features->'value' (0010)
+               EXISTS(SELECT 1 FROM grid_cell g
+                      WHERE g.region_id = r.id AND g.features ? 'value') AS is_index
         FROM region r ORDER BY r.id
     """)
     with engine.connect() as conn:
@@ -90,6 +97,7 @@ def regions():
             cell_count=r["cells"],
             cities_tile_url=_city_tile_url(r["id"]) if r["has_city"] else None,
             roads_tile_url=_road_tile_url(r["id"]) if r["has_road"] else None,
+            index_tile_url=_index_tile_url(r["id"]) if r["is_index"] else None,
         )
         for r in rows
     ]

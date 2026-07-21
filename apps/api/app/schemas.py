@@ -9,6 +9,9 @@ class Region(BaseModel):
     cell_count: int
     cities_tile_url: str | None = None  # шаблон {z}/{x}/{y}, если у региона есть города
     roads_tile_url: str | None = None   # шаблон {z}/{x}/{y}, если у региона есть дороги
+    # шаблон тайлов tile_index, если регион — индексный (ячейки несут
+    # features->'value'): показатель-индекс, а не сумма-сохраняемый (см. 0010)
+    index_tile_url: str | None = None
 
 
 class Indicator(BaseModel):

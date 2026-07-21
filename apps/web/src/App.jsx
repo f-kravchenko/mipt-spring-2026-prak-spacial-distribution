@@ -73,23 +73,17 @@ const MAIN_STYLE = {
 };
 const RF_BOUNDS = [[18, 40], [180, 82]]; // вид всей РФ (для мини-карты), без хвоста за 180°
 
-// Индекс качества городской среды (Минстрой, 2024) — особый регион: таргет
-// задан прямо по городам, без grid/масок. Поэтому это статический слой
-// (диаграмма Вороного по городам, см. etl/build_index_novosibirsk.py),
-// а не пересчёт композиций; grid-машинерия для него выключается по id.
+// Индекс качества городской среды (Минстрой, 2024) — показатель-индекс: не
+// сумма-сохраняемый, поэтому у него не пересчёт композиций (recompute), а
+// свой слой векторных тайлов tile_index (миграция 0010): регион приходит из
+// /api/regions с index_tile_url, ячейка несёт value (IDW балла) и weight
+// (плотность). grid-машинерия (маски/пики/шкала) для него выключается.
 const INDEX_INDICATOR_NAME = "Индекс качества городской среды";
-const INDEX_REGION = {
-  id: -1, slug: "novosibirsk_index",
-  name: "Новосибирская область", // == имя в russia.geojson (подсветка локатора)
-  bbox: [75.088, 53.291, 85.117, 57.236],
-  cell_count: 0, cities_tile_url: null, roads_tile_url: null,
-  index_geojson: "/novosibirsk_index.geojson",
-};
-// Балл индекса: RdYlGn (красный низкий → зелёный высокий), домен по
-// фактическому разбросу городов области (см. build_index_novosibirsk.py).
-const INDEX_STOPS = ["#d73027", "#fc8d59", "#ffffbf", "#91cf60", "#1a9850"];
+// Балл индекса: та же «холодное→горячее» шкала (RdYlBu, синий→красный), что
+// у распределений в других регионах — низкий балл холодный, высокий горячий.
+// Домен по разбросу городов области (см. etl/ingest_index_novosibirsk.py).
+const INDEX_STOPS = DIST_STOPS;
 const INDEX_DOMAIN = [171, 223];
-const isIndexId = (id) => id === INDEX_REGION.id;
 
 // Задержка автопересчёта при движении слайдера веса (мс). Достаточно, чтобы
 // не слать запрос на каждый пиксель драга, но ощущаться "живым", как в
@@ -369,9 +363,7 @@ export default function App() {
     locatorRef.current = locator;
 
     Promise.all([fetchRegions(), fetchIndicators(), fetchMasks()]).then(
-      ([rgApi, ind, mk]) => {
-        // Индекс-регион — синтетический (не из API): дописываем в конец списка.
-        const rg = [...rgApi, INDEX_REGION];
+      ([rg, ind, mk]) => {
         setRegions(rg);
         setIndicators(ind);
         setMasks(mk);
@@ -380,7 +372,7 @@ export default function App() {
         // Восстановленные регион/показатель применяем только если они ещё
         // существуют в справочниках (данные могли смениться) — иначе дефолт.
         if (rg.length)
-          setRegionId(rg.some((r) => r.id === initState.regionId) ? initState.regionId : rgApi[0]?.id ?? rg[0].id);
+          setRegionId(rg.some((r) => r.id === initState.regionId) ? initState.regionId : rg[0].id);
         if (ind.length)
           setIndicator(ind.some((i) => i.code === initState.indicator) ? initState.indicator : ind[0].code);
       }
@@ -515,9 +507,11 @@ export default function App() {
   const presetRef = useRef(presetId);
   presetRef.current = presetId;
   useEffect(() => {
-    // Индекс-регион: grid-слой не считается (нет масок) — гасим живые данные,
-    // рисует отдельный эффект nsk-index ниже.
-    if (isIndexId(regionId)) { setLiveComp(null); setStructure(null); return; }
+    // Индекс-регион (index_tile_url): grid-слой не считается (нет масок/суммы) —
+    // гасим живые данные, рисует отдельный эффект nsk-index ниже.
+    if (regions.find((r) => r.id === regionId)?.index_tile_url) {
+      setLiveComp(null); setStructure(null); return;
+    }
     if (regionId == null || !indicator) return;
     const saved = savedByIndicatorRef.current[indicator];
     if (saved) {
@@ -530,7 +524,7 @@ export default function App() {
       runRecompute(wRef.current);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [regionId, indicator]);
+  }, [regionId, indicator, regions]);
 
   // Запись состояния: localStorage (debounce — не на каждый пиксель драга) +
   // URL через replaceState (без засорения истории браузера; ссылкой можно
@@ -671,7 +665,7 @@ export default function App() {
       dropLayer(map, ranks, `mask-${m.slug}-peak-outline`);
       dropLayer(map, ranks, `mask-${m.slug}-fill`, `mask-${m.slug}`);
     }
-    if (isIndexId(regionId)) return; // у индекс-региона масок нет
+    if (regions.find((r) => r.id === regionId)?.index_tile_url) return; // у индекс-региона масок нет
     for (const m of masks) {
       const st = maskState[m.slug];
       if (!st || !st.visible) continue;
@@ -707,7 +701,7 @@ export default function App() {
       }
     }
     return () => { cancelled = true; };
-  }, [mapReady, masks, maskState, indicator, regionId]);
+  }, [mapReady, masks, maskState, indicator, regionId, regions]);
 
   // Дороги (над масками). Переключение не трогает другие слои.
   useEffect(() => {
@@ -759,10 +753,9 @@ export default function App() {
     dropLayer(map, ranks, "nsk-region-line");
     dropLayer(map, ranks, "nsk-region-bg", "nsk-region");
     const reg = regions.find((r) => r.id === regionId);
-    if (!reg || !reg.index_geojson) return;
+    if (!reg || !reg.index_tile_url) return;
 
-    // Светлая подложка самой области (под кругами городов): видно контур
-    // и «пустую» территорию между городами, а не голую базовую карту.
+    // Светлая подложка области (под сеткой) + контур сверху.
     map.addSource("nsk-region", { type: "geojson", data: "/novosibirsk_border.geojson" });
     addOrdered(map, ranks, {
       id: "nsk-region-bg", type: "fill", source: "nsk-region",
@@ -773,26 +766,31 @@ export default function App() {
       paint: { "line-color": "#b7c6d6", "line-width": 1 },
     }, RANK.road);
 
-    map.addSource("nsk-index", { type: "geojson", data: reg.index_geojson });
-    const fillColor = ["interpolate", ["linear"], ["get", "score"],
+    // Непрерывная сетка 1 км (векторные тайлы tile_index): цвет = value (IDW
+    // балла), прозрачность = weight (плотность населения WorldPop + затухание к
+    // городу; пол 0.12 — сплошное покрытие без дыр). fill-antialias:false —
+    // без сетки швов между ячейками.
+    map.addSource("nsk-index", { type: "vector", tiles: [reg.index_tile_url], minzoom: 0, maxzoom: 12 });
+    const fillColor = ["interpolate", ["linear"], ["get", "value"],
       ...INDEX_STOPS.flatMap((c, i) => [
         INDEX_DOMAIN[0] + (INDEX_DOMAIN[1] - INDEX_DOMAIN[0]) * i / (INDEX_STOPS.length - 1), c,
       ])];
     addOrdered(map, ranks, {
-      id: "nsk-index-fill", type: "fill", source: "nsk-index",
-      paint: { "fill-color": fillColor, "fill-opacity": 0.72 },
+      id: "nsk-index-fill", type: "fill", source: "nsk-index", "source-layer": "index",
+      paint: {
+        "fill-color": fillColor,
+        "fill-antialias": false,
+        "fill-opacity": ["interpolate", ["linear"], ["get", "weight"], 0.12, 0.12, 1, 0.92],
+      },
     }, RANK.dist);
-    addOrdered(map, ranks, {
-      id: "nsk-index-line", type: "line", source: "nsk-index",
-      paint: { "line-color": "#4a5560", "line-width": 0.9, "line-opacity": 0.6 },
-    }, RANK.mask);
 
     const hoverPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false });
     const onMove = (e) => {
       const p = e.features[0].properties;
       map.getCanvas().style.cursor = "pointer";
       hoverPopup.setLngLat(e.lngLat)
-        .setHTML(`<b>${p.name}</b><br>Индекс: <b>${p.score}</b> балла`).addTo(map);
+        .setHTML(`<b>${p.name}</b> (ближайший)<br>Индекс здесь: <b>${fmt(Number(p.value))}</b> балла`)
+        .addTo(map);
     };
     const onLeave = () => { map.getCanvas().style.cursor = ""; hoverPopup.remove(); };
     map.on("mousemove", "nsk-index-fill", onMove);
@@ -883,7 +881,7 @@ export default function App() {
 
   const contract = masks.find((m) => m.slug === contractSlug);
   const selRegion = regions.find((r) => r.id === regionId);
-  const isIndex = isIndexId(regionId);
+  const isIndex = selRegion?.index_tile_url != null;
   const active = liveComp;  // распределение всегда живое
 
   // Легенда: шкала в кратных базовой концентрации (base = показатель /
@@ -923,7 +921,7 @@ export default function App() {
               <select value={regionId ?? ""} onChange={(e) => setRegionId(Number(e.target.value))}>
                 {regions.map((r) => (
                   <option key={r.id} value={r.id}>
-                    {isIndexId(r.id) ? r.name : `${r.name} (${r.cell_count} ячеек)`}
+                    {`${r.name} (${r.cell_count} ячеек)`}
                   </option>
                 ))}
               </select>
@@ -947,9 +945,10 @@ export default function App() {
             {isIndex && (
               <div className="section">
                 <div className="sub" style={{ margin: 0 }}>
-                  Область каждого города выделена виртуально (диаграмма Вороного
-                  по 14 городам области). Наведите курсор — покажется город и его
-                  балл индекса за 2024 год.
+                  Непрерывная сетка 1 км (векторные тайлы, как у других
+                  регионов). Цвет — IDW-интерполяция балла 14 городов; яркость —
+                  плотность населения (WorldPop 2020) + затухание к городу.
+                  Наведите курсор — ближайший город и балл в точке.
                 </div>
               </div>
             )}
@@ -1104,7 +1103,7 @@ export default function App() {
           <div className="bar" style={{ background: `linear-gradient(90deg, ${INDEX_STOPS.join(", ")})` }} />
           <div className="ends"><span>{INDEX_DOMAIN[0]} ниже</span><span>выше {INDEX_DOMAIN[1]}</span></div>
           <div style={{ marginTop: 6, fontSize: 11 }}>
-            14 городов области · области — диаграмма Вороного
+            IDW по 14 городам · яркость = плотность населения (WorldPop)
           </div>
         </div>
       )}
