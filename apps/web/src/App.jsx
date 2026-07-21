@@ -111,13 +111,20 @@ const CITY_SCORE = {
 // вес (яркость) собирается ЗДЕСЬ выражением fill-opacity — смена веса
 // перекрашивает мгновенно, без пересчёта тайлов. slug = ключ в свойствах тайла.
 const INDEX_MASKS = [
-  { slug: "pop",   title: "Население (WorldPop)", w: 0.30 },
-  { slug: "poi",   title: "POI (OSM)",            w: 0.22 },
-  { slug: "green", title: "Зелень (OSM)",         w: 0.12 },
-  { slug: "road",  title: "Дороги (OSM)",         w: 0.125 },
-  { slug: "rail",  title: "Ж/д (OSM)",            w: 0.075 },
-  { slug: "power", title: "ЛЭП (OSM)",            w: 0.05 },
-  { slug: "city",  title: "Близость к городу",    w: 0.11 },
+  { slug: "pop",   title: "Население (WorldPop)", w: 0.30,
+    tip: "WorldPop, растр 1 км. Зональная сумма населения по ячейке.\nНормировка: sqrt(v / p95)." },
+  { slug: "poi",   title: "POI (OSM)",            w: 0.22,
+    tip: "OSM amenity/shop. Плотность точек по ячейке (инфраструктура).\nНормировка: sqrt(v / p95)." },
+  { slug: "green", title: "Зелень (OSM)",         w: 0.12,
+    tip: "OSM parks/gardens/grass (городская зелень, без леса).\nПлотность по ячейке, sqrt(v / p95)." },
+  { slug: "road",  title: "Дороги (OSM)",         w: 0.125,
+    tip: "Близость к крупным дорогам OSM (motorway…secondary).\nЗатухание exp(-d/σ), σ=5 км." },
+  { slug: "rail",  title: "Ж/д (OSM)",            w: 0.075,
+    tip: "Близость к железным дорогам OSM (railway=rail).\nЗатухание exp(-d/σ), σ=6 км." },
+  { slug: "power", title: "ЛЭП (OSM)",            w: 0.05,
+    tip: "Близость к ЛЭП OSM (power=line).\nЗатухание exp(-d/σ), σ=8 км." },
+  { slug: "city",  title: "Близость к городу",    w: 0.11,
+    tip: "Затухание к ближайшему из 14 городов (гаусс, σ=15 км).\nБазовое присутствие, чтобы не было дыр." },
 ];
 const INDEX_DEFAULT_W = Object.fromEntries(INDEX_MASKS.map((m) => [m.slug, m.w]));
 
@@ -1041,6 +1048,24 @@ export default function App() {
               </select>
             </div>
 
+            {!isIndex && (
+              <div className="section">
+                <label>Масштаб сравнения</label>
+                <div className="scale-toggle">
+                  <button
+                    className={scaleMode === "territory" ? "on" : ""}
+                    title="Шкала растянута до максимума выбранной территории — видна её внутренняя структура"
+                    onClick={() => setScaleMode("territory")}
+                  >Территория</button>
+                  <button
+                    className={scaleMode === "russia" ? "on" : ""}
+                    title="Шкала фиксирована по всем регионам (p99): одинаковый цвет — одинаковое абсолютное значение"
+                    onClick={() => setScaleMode("russia")}
+                  >Россия</button>
+                </div>
+              </div>
+            )}
+
             <div className="section">
               <label>Показатель</label>
               {isIndex ? (
@@ -1071,8 +1096,7 @@ export default function App() {
             )}
 
             {isIndex && (
-              <details className="section fold" open>
-                <summary>Веса масок присутствия</summary>
+              <div className="section">
                 <div className="weights">
                   <div className="weights-head">
                     <span>вклад маски в яркость</span>
@@ -1089,6 +1113,7 @@ export default function App() {
                             onChange={() => toggleIndexMask(m.slug)} />
                           <span className="title" style={{ opacity: on ? 1 : 0.5 }}
                             onClick={() => toggleIndexMask(m.slug)}>{m.title}</span>
+                          <span className="info" title={m.tip} style={{ cursor: "help" }}>i</span>
                         </div>
                         <div className="wrow" style={{ border: "none", padding: "2px 0 0" }}>
                           <input type="range" min="0" max="1" step="0.05" disabled={!on}
@@ -1104,7 +1129,7 @@ export default function App() {
                     {indexComputing ? "Перестройка…" : "Пересчитать"}
                   </button>
                 </div>
-              </details>
+              </div>
             )}
 
             {isIndex && (
@@ -1137,23 +1162,6 @@ export default function App() {
 
             {!isIndex && <>
             <div className="section">
-              <label>Масштаб сравнения</label>
-              <div className="scale-toggle">
-                <button
-                  className={scaleMode === "territory" ? "on" : ""}
-                  title="Шкала растянута до максимума выбранной территории — видна её внутренняя структура"
-                  onClick={() => setScaleMode("territory")}
-                >Территория</button>
-                <button
-                  className={scaleMode === "russia" ? "on" : ""}
-                  title="Шкала фиксирована по всем регионам (p99): одинаковый цвет — одинаковое абсолютное значение"
-                  onClick={() => setScaleMode("russia")}
-                >Россия</button>
-              </div>
-            </div>
-
-            <details className="section fold">
-              <summary>Веса масок</summary>
               <div className="weights">
                 <div className="weights-head">
                   <span>вес маски в составе · сумма сохраняется</span>
@@ -1172,7 +1180,7 @@ export default function App() {
                         <span className="title" style={{ opacity: enabled ? 1 : 0.5 }}
                           onClick={() => toggleWeight(m.slug)}>{m.title}</span>
                         {m.is_baseline && <span className="badge">baseline</span>}
-                        <span className="info" title="Контракт маски"
+                        <span className="info" title={maskTip(m)}
                           onClick={() => setContractSlug(m.slug)}>i</span>
                       </div>
                       <div className="wrow" style={{ border: "none", padding: "2px 0 0" }}>
@@ -1199,7 +1207,7 @@ export default function App() {
               </div>
 
               {contract && <MaskContract m={contract} onClose={() => setContractSlug(null)} />}
-            </details>
+            </div>
 
             <details className="section fold">
               <summary>
@@ -1321,6 +1329,19 @@ function Metrics({ comp }) {
       </table>
     </div>
   );
+}
+
+// Текст нативной подсказки над «i»: суть маски сразу при наведении (нативный
+// title не обрезается overflow панели, в отличие от CSS-тултипа). Клик — полный
+// контракт в MaskContract.
+function maskTip(m) {
+  return [
+    m.signal || m.title,
+    m.source && `Источник: ${m.source}`,
+    m.influence && `Влияние: ${m.influence}`,
+    m.formula && `Формула: ${m.formula}`,
+    "— клик: полный контракт",
+  ].filter(Boolean).join("\n");
 }
 
 function MaskContract({ m, onClose }) {
