@@ -11,7 +11,7 @@ data/raw/worldpop/
 data/processed/*.tif
 # вырезка WorldPop по НСО (2.6 МБ) — коммитим, чтобы ingest_index был
 # воспроизводим без скачивания 194 МБ национального растра (см. clip-скрипт)
-!data/processed/pop_nso_z.tif
+!data/processed/novosibirsk_ikgs_pop.tif
 
 # Сервис
 node_modules/
