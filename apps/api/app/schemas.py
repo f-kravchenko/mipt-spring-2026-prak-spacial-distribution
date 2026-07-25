@@ -12,6 +12,8 @@ class Region(BaseModel):
     # шаблон тайлов tile_index, если регион — индексный (ячейки несут
     # features->'value'): показатель-индекс, а не сумма-сохраняемый (см. 0010)
     index_tile_url: str | None = None
+    # максимум балла ИКГС в регионе — верх линейной шкалы покраски (0..max)
+    index_max: float | None = None
 
 
 class Indicator(BaseModel):

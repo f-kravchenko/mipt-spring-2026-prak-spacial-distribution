@@ -14,6 +14,9 @@ async function get(path) {
 export const fetchRegions = () => get("/api/regions");
 export const fetchIndicators = () => get("/api/indicators");
 export const fetchMasks = () => get("/api/masks");
+// Справочник индекс-региона (ИКГС): маски присутствия, баллы городов, домен,
+// имя показателя. Раньше был захардкожен в App.jsx (см. /api/index-config).
+export const fetchIndexConfig = () => get("/api/index-config");
 
 // Автоподбор весов композиции под показатель (§9, "обоснование весов").
 // -> dict {mask.slug: вес}, сумма = 1.0. Бэкенд должен вызвать

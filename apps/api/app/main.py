@@ -13,6 +13,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from .db import TILES_BASE_URL, engine
+from .index_config import (
+    CITY_SCORES, DEFAULT_WEIGHTS, DOMAIN, INDICATOR_NAME, MASK_ORDER,
+)
 from .schemas import (
     Indicator, Mask, RecomputeRequest, RecomputeResult, Region,
 )
@@ -80,12 +83,15 @@ def regions():
         SELECT r.id, r.slug, r.name,
                ST_XMin(r.geom) AS minx, ST_YMin(r.geom) AS miny,
                ST_XMax(r.geom) AS maxx, ST_YMax(r.geom) AS maxy,
-               (SELECT count(*) FROM grid_cell g WHERE g.region_id = r.id) AS cells,
+               (SELECT count(*) FROM grid_cell g WHERE g.region_id = r.id) AS all_cells,
+               -- индексные ячейки несут features->'value' (0010); у индекс-региона
+               -- в счётчике показываем именно их (Росстат-ячейки могут лежать рядом)
+               (SELECT count(*) FROM grid_cell g
+                WHERE g.region_id = r.id AND g.features ? 'value') AS index_cells,
+               (SELECT max((g.features->>'value')::float) FROM grid_cell g
+                WHERE g.region_id = r.id AND g.features ? 'value') AS index_max,
                EXISTS(SELECT 1 FROM city  c WHERE c.region_id = r.id) AS has_city,
-               EXISTS(SELECT 1 FROM road  d WHERE d.region_id = r.id) AS has_road,
-               -- индексный регион: его ячейки несут features->'value' (0010)
-               EXISTS(SELECT 1 FROM grid_cell g
-                      WHERE g.region_id = r.id AND g.features ? 'value') AS is_index
+               EXISTS(SELECT 1 FROM road  d WHERE d.region_id = r.id) AS has_road
         FROM region r ORDER BY r.id
     """)
     with engine.connect() as conn:
@@ -94,10 +100,11 @@ def regions():
         Region(
             id=r["id"], slug=r["slug"], name=r["name"],
             bbox=[r["minx"], r["miny"], r["maxx"], r["maxy"]],
-            cell_count=r["cells"],
+            cell_count=r["index_cells"] if r["index_cells"] else r["all_cells"],
             cities_tile_url=_city_tile_url(r["id"]) if r["has_city"] else None,
             roads_tile_url=_road_tile_url(r["id"]) if r["has_road"] else None,
-            index_tile_url=_index_tile_url(r["id"]) if r["is_index"] else None,
+            index_tile_url=_index_tile_url(r["id"]) if r["index_cells"] else None,
+            index_max=r["index_max"],
         )
         for r in rows
     ]
@@ -112,6 +119,26 @@ def indicators():
     with engine.connect() as conn:
         rows = conn.execute(sql).mappings().all()
     return [Indicator(**r) for r in rows]
+
+
+@app.get("/api/index-config")
+def get_index_config():
+    """Справочник индекс-региона (ИКГС): маски присутствия (= словарь отгруженных
+    товаров, контракты из таблицы mask), баллы городов, домен, имя показателя."""
+    rows = {r["slug"]: r for r in engine.connect().execute(text(
+        "SELECT slug, title, source, signal, formula, normalization, influence::text AS influence "
+        "FROM mask WHERE slug = ANY(:slugs)"
+    ), {"slugs": MASK_ORDER}).mappings().all()}
+    masks = []
+    for slug in MASK_ORDER:
+        r = rows.get(slug)
+        if not r:
+            continue
+        masks.append({"key": slug, "title": r["title"], "source": r["source"],
+                      "signal": r["signal"], "formula": r["formula"],
+                      "influence": r["influence"], "default_weight": DEFAULT_WEIGHTS.get(slug, 0.0)})
+    return {"indicator_name": INDICATOR_NAME, "domain": DOMAIN,
+            "city_scores": CITY_SCORES, "masks": masks}
 
 
 @app.get("/api/masks", response_model=list[Mask])

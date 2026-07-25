@@ -19,15 +19,22 @@ DECLARE
 BEGIN
     SELECT ST_AsMVT(t, 'index', 4096, 'mvtgeom') INTO result
     FROM (
+        -- маски присутствия = словарь отгруженных товаров (10 масок, слаги
+        -- таблицы mask); значения ячеек кладёт ingest_index (свои для НСО либо
+        -- пространственный джойн к Росстат-маскам региона). Яркость собирает
+        -- фронт из этих компонент выражением fill-opacity.
         SELECT (gc.features->>'value')::double precision AS value,
-               gc.features->>'name'                      AS name,
-               (gc.features->>'pop')::real   AS pop,
-               (gc.features->>'poi')::real   AS poi,
-               (gc.features->>'green')::real AS green,
-               (gc.features->>'road')::real  AS road,
-               (gc.features->>'rail')::real  AS rail,
-               (gc.features->>'power')::real AS power,
-               (gc.features->>'city')::real  AS city,
+               gc.features->>'name'                              AS name,
+               (gc.features->>'baseline_mask')::real            AS baseline_mask,
+               (gc.features->>'distance_to_center_mask')::real  AS distance_to_center_mask,
+               (gc.features->>'distance_to_city_mask')::real    AS distance_to_city_mask,
+               (gc.features->>'power_lines_mask')::real         AS power_lines_mask,
+               (gc.features->>'railway_mask')::real             AS railway_mask,
+               (gc.features->>'regression_mask')::real          AS regression_mask,
+               (gc.features->>'road_network_mask')::real        AS road_network_mask,
+               (gc.features->>'road_traveltime_mask')::real     AS road_traveltime_mask,
+               (gc.features->>'territory_type_mask')::real      AS territory_type_mask,
+               (gc.features->>'worldpop_mask')::real            AS worldpop_mask,
                ST_AsMVTGeom(ST_Transform(gc.geom, 3857), env, 4096, 64, true) AS mvtgeom
         FROM grid_cell gc
         WHERE gc.region_id = reg

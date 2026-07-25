@@ -135,21 +135,28 @@ changes:
 ./deploy/vds/run-etl.sh
 ```
 
-### Novosibirsk urban-environment index (ИКГС)
+### Urban-environment index (ИКГС) as an index layer
 
-This region is not part of the Rosstat pipeline — it has its own loader and its
-own tile function `tile_index` (migration `0010`). After the schema migration is
-applied by `deploy.sh`, load the region once:
+ИКГС is loaded as an *index layer* (own tile function `tile_index`, migration
+`0010`) for several regions: `novosibirsk_ikgs`, `krasnodar`, `yakutia_center`,
+`moscow`. The loader (`etl.ingest_index --region <slug>`) reuses each region's
+existing polygon from the DB and **only replaces its ИКГС cells** (features →
+`value`) — Rosstat grid data for the same region is left intact.
+
+Source data (per-НП scores, footprints, and optional WorldPop/OSM masks) is
+prepared offline with `etl.fetch_index_region` and committed under
+`data/processed/<slug>_*.{json,tif}`, so on the server only the ingest runs.
+After `deploy.sh` applies the migration:
 
 ```bash
-./deploy/vds/run-etl-nso.sh
+./deploy/vds/run-etl-index.sh                       # all index regions
+./deploy/vds/run-etl-index.sh krasnodar yakutia_center   # or specific ones
 ```
 
-It ingests the 1 km grid + presence masks + roads, then restarts `tiles` so
-Martin discovers `tile_index`. Re-run it only when the index data or masks
-change. Note: adding any new PostgreSQL tile function requires restarting
-`tiles` (Martin scans functions at startup) — `run-etl-nso.sh` does this for
-`tile_index`.
+It ingests the 1 km index grid + presence masks (+ roads where the region has
+none yet), then restarts `tiles` so Martin discovers `tile_index`. Re-run when
+the index data changes. Note: adding a new PostgreSQL tile function requires
+restarting `tiles` (Martin scans functions at startup) — the script does this.
 
 ## Notes
 

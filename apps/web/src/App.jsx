@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
-import { fetchRegions, fetchIndicators, fetchMasks, fetchDefaultWeights, fetchMaskPeaks, fetchConcentrationStructure, fetchGlobalScale, recompute } from "./api";
+import { fetchRegions, fetchIndicators, fetchMasks, fetchIndexConfig, fetchDefaultWeights, fetchMaskPeaks, fetchConcentrationStructure, fetchGlobalScale, recompute } from "./api";
 
 // Специальный id пресета "Автоподбор": веса запрашиваются у бэкенда через
 // GET /api/default-weights?indicator=... (src/masks/weighting.resolve_weights,
@@ -78,68 +78,31 @@ const RF_BOUNDS = [[18, 40], [180, 82]]; // вид всей РФ (для мин�
 // свой слой векторных тайлов tile_index (миграция 0010): регион приходит из
 // /api/regions с index_tile_url, ячейка несёт value (балл НП + затухание) и weight
 // (плотность). grid-машинерия (маски/пики/шкала) для него выключается.
-const INDEX_INDICATOR_NAME = "Индекс качества городской среды";
-// Балл индекса: та же «холодное→горячее» шкала (RdYlBu, синий→красный), что
-// у распределений в других регионах — низкий балл холодный, высокий горячий.
-// Домен по разбросу городов области (см. etl/ingest_index_novosibirsk.py).
+// Балл индекса: та же «холодное→горячее» шкала (RdYlBu, синий→красный), что у
+// распределений в других регионах. Домен и справочники (маски, баллы городов,
+// имя показателя) приходят с бэка — /api/index-config (fetchIndexConfig); здесь
+// только ОТОБРАЖЕНИЕ (палитра/гамма), не справочные данные.
 const INDEX_STOPS = DIST_STOPS;
-// value = балл внутри контура НП (171..223), затухание вдвое/5 км вне него → до
-// ~0 в глубине области. Поэтому шкала от 0, а не от 171 (мин. балл города):
-// иначе весь ореол затухания и село схлопывались бы в один холодный цвет.
-const INDEX_DOMAIN = [0, 223];
-// Нелинейная (степенная) шкала: значения затухания скошены к 0 (95% ячеек —
-// низкие), при линейной шкале карта была бы «почти вся синяя». gamma>1 сгущает
-// цветовые стопы к низу диапазона → затухание получает больше оттенков.
-// Позиции стопов (value, цвет) считаем один раз и делим между заливкой и легендой.
-const INDEX_GAMMA = 2;
-const INDEX_COLOR_STOPS = INDEX_STOPS.map((color, i) => ({
+// Линейная шкала покраски от 0 до максимума региона (домен приходит в
+// indexDomain). Позиции стопов (value, цвет) делятся между заливкой и легендой.
+const indexColorStops = (domain) => INDEX_STOPS.map((color, i) => ({
   color,
-  v: INDEX_DOMAIN[0] + (INDEX_DOMAIN[1] - INDEX_DOMAIN[0])
-     * Math.pow(i / (INDEX_STOPS.length - 1), INDEX_GAMMA),
+  v: domain[0] + (domain[1] - domain[0]) * i / (INDEX_STOPS.length - 1),
 }));
-// Баллы реестра по НП (Минстрой-2024). Внутри контура value == балл города
-// (затухание 0.5^0 = 1); чуть наружу — строго меньше. Так по value отличаем
-// «курсор прямо над городом» от «ближайший город» без флага в тайле.
-const CITY_SCORE = {
-  Новосибирск: 223, Бердск: 210, Обь: 216, Искитим: 179, Куйбышев: 200,
-  Барабинск: 178, Карасук: 205, Татарск: 195, Купино: 180, Черепаново: 180,
-  Болотное: 178, Каргат: 178, Чулым: 173, Тогучин: 171,
-};
+// Подсказка над «i» маски присутствия — из полей контракта (с бэка).
+const indexMaskTip = (m) => [
+  m.signal, m.source && `Источник: ${m.source}`, m.formula && `Формула: ${m.formula}`,
+].filter(Boolean).join("\n");
 
-// Маски присутствия индекс-региона (та же панель чекбоксов/ползунков, что у
-// других регионов). Компоненты 0..1 приходят в тайле tile_index по ячейке;
-// вес (яркость) собирается ЗДЕСЬ выражением fill-opacity — смена веса
-// перекрашивает мгновенно, без пересчёта тайлов. slug = ключ в свойствах тайла.
-const INDEX_MASKS = [
-  { slug: "pop",   title: "Население (WorldPop)", w: 0.30,
-    tip: "WorldPop, растр 1 км. Зональная сумма населения по ячейке.\nНормировка: sqrt(v / p95)." },
-  { slug: "poi",   title: "POI (OSM)",            w: 0.22,
-    tip: "OSM amenity/shop. Плотность точек по ячейке (инфраструктура).\nНормировка: sqrt(v / p95)." },
-  { slug: "green", title: "Зелень (OSM)",         w: 0.12,
-    tip: "OSM parks/gardens/grass (городская зелень, без леса).\nПлотность по ячейке, sqrt(v / p95)." },
-  { slug: "road",  title: "Дороги (OSM)",         w: 0.125,
-    tip: "Близость к крупным дорогам OSM (motorway…secondary).\nЗатухание exp(-d/σ), σ=5 км." },
-  { slug: "rail",  title: "Ж/д (OSM)",            w: 0.075,
-    tip: "Близость к железным дорогам OSM (railway=rail).\nЗатухание exp(-d/σ), σ=6 км." },
-  { slug: "power", title: "ЛЭП (OSM)",            w: 0.05,
-    tip: "Близость к ЛЭП OSM (power=line).\nЗатухание exp(-d/σ), σ=8 км." },
-  { slug: "city",  title: "Близость к городу",    w: 0.11,
-    tip: "Затухание к ближайшему из 14 городов (гаусс, σ=15 км).\nБазовое присутствие, чтобы не было дыр." },
-];
-const INDEX_DEFAULT_W = Object.fromEntries(INDEX_MASKS.map((m) => [m.slug, m.w]));
-
-// fill-opacity: пол 0.12 (сплошное покрытие, как baseline) + вклад масок,
-// нормированный на сумму весов (дефолт воспроизводит исходную смесь). Все
-// маски выкл (Σ=0) → ровный фон 0.12.
-// Пол непрозрачности: даже при нулевом «присутствии» цвет-балл должен читаться
-// (в частности value=0 — сплошной синий, а не выцветшая подложка). Присутствие
-// модулирует яркость выше пола (FLOOR..0.9), но не гасит цвет в прозрачность.
+// fill-opacity: пол — даже при нулевом «присутствии» цвет-балл должен читаться
+// (value=0 — сплошной синий, а не выцветшая подложка). Присутствие модулирует
+// яркость выше пола (FLOOR..0.9), но не гасит цвет в прозрачность. masks — с бэка.
 const INDEX_OPACITY_FLOOR = 0.5;
-function buildIndexOpacity(w) {
-  const slugs = INDEX_MASKS.map((m) => m.slug);
-  const sum = slugs.reduce((s, k) => s + (w[k] || 0), 0);
+function buildIndexOpacity(w, masks) {
+  const keys = masks.map((m) => m.key);
+  const sum = keys.reduce((s, k) => s + (w[k] || 0), 0);
   if (sum <= 0) return INDEX_OPACITY_FLOOR;
-  const terms = slugs.filter((k) => w[k] > 0).map((k) => ["*", w[k] / sum, ["get", k]]);
+  const terms = keys.filter((k) => w[k] > 0).map((k) => ["*", w[k] / sum, ["get", k]]);
   return ["interpolate", ["linear"], ["+", 0, ...terms], 0, INDEX_OPACITY_FLOOR, 1, 0.9];
 }
 
@@ -252,12 +215,21 @@ export default function App() {
   const [showBaseline, setShowBaseline] = useState(false);
   const [baselineComp, setBaselineComp] = useState(null);
 
-  // Веса масок присутствия индекс-региона (см. INDEX_MASKS). Отдельно от
-  // weights (те — для recompute обычных регионов). indexWeights — черновик
-  // (ползунки/чекбоксы), на карту попадает только по кнопке «Пересчитать»
-  // (appliedIndexW). Пока карта перерисовывается — кнопка неактивна.
-  const [indexWeights, setIndexWeights] = useState(initState.indexWeights || INDEX_DEFAULT_W);
-  const [appliedIndexW, setAppliedIndexW] = useState(initState.indexWeights || INDEX_DEFAULT_W);
+  // Справочник индекс-региона с бэка (маски присутствия, баллы городов, домен,
+  // имя показателя) — /api/index-config. Пока не загружен — безопасные дефолты,
+  // индекс-слой дорисуется по приходу конфига. Раньше был захардкожен на фронте.
+  const [indexConfig, setIndexConfig] = useState(null);
+  const indexMasks = indexConfig?.masks ?? [];
+  const cityScore = indexConfig?.city_scores ?? {};
+  const indexName = indexConfig?.indicator_name ?? "Индекс качества городской среды";
+  // indexDomain/indexStops зависят от scaleMode — считаются ниже, после его объявления.
+
+  // Веса масок присутствия индекс-региона (ключи = m.key). Отдельно от weights
+  // (те — для recompute обычных регионов). indexWeights — черновик (ползунки/
+  // чекбоксы), на карту попадает только по «Пересчитать» (appliedIndexW). Пустой
+  // старт до конфига — дефолты проставляет эффект по приходу /api/index-config.
+  const [indexWeights, setIndexWeights] = useState(initState.indexWeights || {});
+  const [appliedIndexW, setAppliedIndexW] = useState(initState.indexWeights || {});
   const [indexComputing, setIndexComputing] = useState(false);
   const idxPrevRef = useRef({}); // прежний вес маски для возврата по чекбоксу
   const toggleIndexMask = (slug) => setIndexWeights((w) => {
@@ -267,13 +239,42 @@ export default function App() {
   });
   const setIndexWeight = (slug, v) => setIndexWeights((w) => ({ ...w, [slug]: v }));
   const resetIndexWeights = () =>
-    setIndexWeights(Object.fromEntries(INDEX_MASKS.map((m) => [m.slug, 0])));
+    setIndexWeights(Object.fromEntries(indexMasks.map((m) => [m.key, 0])));
+
+  // «Базовая» — не ползунок, а триггер сравнения: клик гасит все прочие маски
+  // (яркость = только площадь), повторный клик возвращает прежние веса. Применяем
+  // сразу (без «Пересчитать»), как у обычных регионов.
+  const BASELINE_KEY = "baseline_mask";
+  const idxPreBaselineRef = useRef(null);
+  const indexBaselineOnly = (w) => (w[BASELINE_KEY] > 0)
+    && indexMasks.every((m) => m.key === BASELINE_KEY || !(w[m.key] > 0));
+  const toggleIndexBaseline = () => {
+    let next;
+    if (indexBaselineOnly(appliedIndexW)) {
+      next = idxPreBaselineRef.current
+        || Object.fromEntries(indexMasks.map((m) => [m.key, m.default_weight]));
+    } else {
+      idxPreBaselineRef.current = appliedIndexW;
+      next = Object.fromEntries(indexMasks.map((m) => [m.key, m.key === BASELINE_KEY ? 1 : 0]));
+    }
+    setIndexWeights(next); setAppliedIndexW(next); setIndexComputing(true);
+  };
   const indexDirty = JSON.stringify(indexWeights) !== JSON.stringify(appliedIndexW);
   const applyIndexWeights = () => {
     if (!indexDirty) return;
     setIndexComputing(true);           // снимется по событию карты 'idle' (эффект ниже)
     setAppliedIndexW(indexWeights);
   };
+  // Дефолтные веса по приходу конфига. Пере-сеем, если сохранённые в localStorage
+  // веса не покрывают текущий набор ключей масок (набор сменился — старые слаги).
+  useEffect(() => {
+    if (!indexConfig) return;
+    const keys = indexMasks.map((m) => m.key);
+    if (keys.length && keys.every((k) => k in indexWeights)) return;
+    const def = Object.fromEntries(indexMasks.map((m) => [m.key, m.default_weight]));
+    setIndexWeights(def); setAppliedIndexW(def);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [indexConfig]);
 
   // Левая панель — плавающая карточка (не edge-to-edge сайдбар), можно свернуть.
   // panelWidth измеряется реально (ResizeObserver), а не константой, чтобы
@@ -331,6 +332,14 @@ export default function App() {
   // региональный показатель) — селектор меняет только окраску и подписи.
   const [scaleMode, setScaleMode] = useState(initState.scaleMode);
   const [globalScale, setGlobalScale] = useState(null); // {p99, national_total}
+
+  // Шкала индекса. «Территория» — 0..максимум региона (index_max); «Россия» —
+  // 0..максимум балла по всем индекс-регионам (одинаковый цвет = одинаковый балл).
+  const indexMax = regions.find((r) => r.id === regionId)?.index_max;
+  const indexMaxRF = Math.max(0, ...regions.map((r) => r.index_max || 0));
+  const indexDomain = [0, (scaleMode === "russia" ? indexMaxRF : indexMax)
+    || indexConfig?.domain?.[1] || 223];
+  const indexStops = indexColorStops(indexDomain);
 
   // p99 другого показателя — не наша шкала: сбрасываем, чтобы карта не красилась
   // по чужому домену, пока едет свежий ответ (легенда покажет "считаем…").
@@ -452,6 +461,7 @@ export default function App() {
     });
     locatorRef.current = locator;
 
+    fetchIndexConfig().then(setIndexConfig).catch(() => setIndexConfig(null));
     Promise.all([fetchRegions(), fetchIndicators(), fetchMasks()]).then(
       ([rg, ind, mk]) => {
         setRegions(rg);
@@ -863,10 +873,15 @@ export default function App() {
     dropLayer(map, ranks, "nsk-cities-line", "nsk-cities");
     const reg = regions.find((r) => r.id === regionId);
     if (!reg || !reg.index_tile_url || !showBorders) return;
-    map.addSource("nsk-cities", { type: "geojson", data: "/novosibirsk_cities.geojson" });
+    map.addSource("nsk-cities", { type: "geojson", data: `/${reg.slug}_npcontours.geojson` });
     addOrdered(map, ranks, {
       id: "nsk-cities-line", type: "line", source: "nsk-cities",
-      paint: { "line-color": "#1f2d3d", "line-width": 1.2, "line-opacity": 0.85 },
+      paint: {
+        "line-color": "#1f2d3d",
+        // тоньше на обзоре, чётче при приближении (как у слоя дорог)
+        "line-width": ["interpolate", ["linear"], ["zoom"], 6, 0.2, 10, 0.6, 14, 1.6],
+        "line-opacity": 0.85,
+      },
     }, RANK.road);
   }, [mapReady, regionId, regions, showBorders]);
 
@@ -905,7 +920,7 @@ export default function App() {
     if (!reg || !reg.index_tile_url) return;
 
     // Светлая подложка области (под сеткой) + контур сверху.
-    map.addSource("nsk-region", { type: "geojson", data: "/novosibirsk_border.geojson" });
+    map.addSource("nsk-region", { type: "geojson", data: `/${reg.slug}_border.geojson` });
     addOrdered(map, ranks, {
       id: "nsk-region-bg", type: "fill", source: "nsk-region",
       paint: { "fill-color": "#eef3f8", "fill-opacity": 0.92 },
@@ -921,7 +936,7 @@ export default function App() {
     // без сетки швов между ячейками.
     map.addSource("nsk-index", { type: "vector", tiles: [reg.index_tile_url], minzoom: 0, maxzoom: 12 });
     const fillColor = ["interpolate", ["linear"], ["get", "value"],
-      ...INDEX_COLOR_STOPS.flatMap((s) => [s.v, s.color])];
+      ...indexStops.flatMap((s) => [s.v, s.color])];
     addOrdered(map, ranks, {
       id: "nsk-index-fill", type: "fill", source: "nsk-index", "source-layer": "index",
       paint: {
@@ -929,7 +944,7 @@ export default function App() {
         "fill-antialias": false,
         // яркость = вклад ПРИМЕНЁННЫХ масок; смена — эффектом ниже
         // (setPaintProperty), поэтому appliedIndexW берётся замыканием, не в deps
-        "fill-opacity": buildIndexOpacity(appliedIndexW),
+        "fill-opacity": buildIndexOpacity(appliedIndexW, indexMasks),
       },
     }, RANK.dist);
 
@@ -939,7 +954,7 @@ export default function App() {
       map.getCanvas().style.cursor = "pointer";
       // курсор прямо над городом (внутри контура) → value == балл реестра;
       // «(ближайший)» показываем только вне контура
-      const inCity = Number(p.value) >= (CITY_SCORE[p.name] ?? Infinity) - 0.5;
+      const inCity = Number(p.value) >= (cityScore[p.name] ?? Infinity) - 0.5;
       hoverPopup.setLngLat(e.lngLat)
         .setHTML(`<b>${p.name}</b>${inCity ? "" : " (ближайший)"}<br>Индекс здесь: <b>${fmt(Number(p.value))}</b> балла`)
         .addTo(map);
@@ -952,7 +967,7 @@ export default function App() {
       map.off("mouseleave", "nsk-index-fill", onLeave);
       hoverPopup.remove();
     };
-  }, [mapReady, regionId, regions]);
+  }, [mapReady, regionId, regions, indexConfig]);
 
   // Применение ПРИМЕНЁННЫХ весов (по кнопке «Пересчитать»): перекраска
   // fill-opacity готового слоя (без пересоздания источника — как переключатель
@@ -963,7 +978,7 @@ export default function App() {
     if (!map || !mapReady) return;
     // слой ещё не создан (или карта пересоздаётся) — не зависаем в «Перестройка…»
     if (!map.getLayer("nsk-index-fill")) { setIndexComputing(false); return; }
-    map.setPaintProperty("nsk-index-fill", "fill-opacity", buildIndexOpacity(appliedIndexW));
+    map.setPaintProperty("nsk-index-fill", "fill-opacity", buildIndexOpacity(appliedIndexW, indexMasks));
     // Снимаем «Перестройка…» по 'idle' (карта дорисовалась) ИЛИ по таймауту —
     // подложка в песочнице иногда не доходит до 'idle', и без страховки кнопка
     // залипала бы. Перекраска paint-выражением всё равно применяется мгновенно.
@@ -972,7 +987,17 @@ export default function App() {
     map.once("idle", done);
     const t = setTimeout(done, 700);
     return () => { map.off("idle", done); clearTimeout(t); };
-  }, [mapReady, appliedIndexW]);
+  }, [mapReady, appliedIndexW, indexConfig]);
+
+  // Смена масштаба (Территория/Россия) → мгновенная перекраска шкалы индекса
+  // (setPaintProperty, без пересоздания источника — как у grid-распределения).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady || !map.getLayer("nsk-index-fill")) return;
+    map.setPaintProperty("nsk-index-fill", "fill-color",
+      ["interpolate", ["linear"], ["get", "value"], ...indexStops.flatMap((s) => [s.v, s.color])]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapReady, scaleMode, indexConfig, regionId]);
 
   // Линии концентрации между пиками (ТЗ п.5) + точки-пики, поверх всего
   // (RANK.structure — выше городов). Реальные GeoJSON-фичи, не векторные
@@ -1099,29 +1124,29 @@ export default function App() {
               </select>
             </div>
 
-            {!isIndex && (
-              <div className="section">
-                <label>Масштаб сравнения</label>
-                <div className="scale-toggle">
-                  <button
-                    className={scaleMode === "territory" ? "on" : ""}
-                    title="Шкала растянута до максимума выбранной территории — видна её внутренняя структура"
-                    onClick={() => setScaleMode("territory")}
-                  >Территория</button>
-                  <button
-                    className={scaleMode === "russia" ? "on" : ""}
-                    title="Шкала фиксирована по всем регионам (p99): одинаковый цвет — одинаковое абсолютное значение"
-                    onClick={() => setScaleMode("russia")}
-                  >Россия</button>
-                </div>
+            <div className="section">
+              <label>Масштаб сравнения</label>
+              <div className="scale-toggle">
+                <button
+                  className={scaleMode === "territory" ? "on" : ""}
+                  title="Шкала растянута до максимума выбранной территории — видна её внутренняя структура"
+                  onClick={() => setScaleMode("territory")}
+                >Территория</button>
+                <button
+                  className={scaleMode === "russia" ? "on" : ""}
+                  title={isIndex
+                    ? "Единая шкала по всем регионам (0…макс. балл ИКГС по РФ): одинаковый цвет — одинаковый балл"
+                    : "Шкала фиксирована по всем регионам (p99): одинаковый цвет — одинаковое абсолютное значение"}
+                  onClick={() => setScaleMode("russia")}
+                >Россия</button>
               </div>
-            )}
+            </div>
 
             <div className="section">
               <label>Показатель</label>
               {isIndex ? (
                 <select value="idx" disabled>
-                  <option value="idx">{INDEX_INDICATOR_NAME}</option>
+                  <option value="idx">{indexName}</option>
                 </select>
               ) : (
                 <select value={indicator ?? ""} onChange={(e) => setIndicator(e.target.value)}>
@@ -1154,22 +1179,40 @@ export default function App() {
                     <span className="reset" title="Обнулить все веса"
                       onClick={resetIndexWeights}>сброс</span>
                   </div>
-                  {INDEX_MASKS.map((m) => {
-                    const wv = indexWeights[m.slug] ?? 0;
+                  {indexMasks.map((m) => {
+                    // «Базовая» — триггер сравнения (без ползунка): клик гасит
+                    // остальные маски, повторный клик возвращает прежние веса.
+                    if (m.key === BASELINE_KEY) {
+                      const active = indexBaselineOnly(indexWeights);
+                      return (
+                        <div className="mask-row" key={m.key}>
+                          <div className="head">
+                            <input type="checkbox" checked={active}
+                              title="Показать только базовую (равномерно по площади) — гасит остальные маски"
+                              onChange={toggleIndexBaseline} />
+                            <span className="title" style={{ fontWeight: active ? 600 : 400 }}
+                              onClick={toggleIndexBaseline}>{m.title}</span>
+                            <span className="badge">baseline</span>
+                            <span className="info" title={indexMaskTip(m)} style={{ cursor: "help" }}>i</span>
+                          </div>
+                        </div>
+                      );
+                    }
+                    const wv = indexWeights[m.key] ?? 0;
                     const on = wv > 0;
                     return (
-                      <div className="mask-row" key={m.slug}>
+                      <div className="mask-row" key={m.key}>
                         <div className="head">
                           <input type="checkbox" checked={on}
-                            onChange={() => toggleIndexMask(m.slug)} />
+                            onChange={() => toggleIndexMask(m.key)} />
                           <span className="title" style={{ opacity: on ? 1 : 0.5 }}
-                            onClick={() => toggleIndexMask(m.slug)}>{m.title}</span>
-                          <span className="info" title={m.tip} style={{ cursor: "help" }}>i</span>
+                            onClick={() => toggleIndexMask(m.key)}>{m.title}</span>
+                          <span className="info" title={indexMaskTip(m)} style={{ cursor: "help" }}>i</span>
                         </div>
                         <div className="wrow" style={{ border: "none", padding: "2px 0 0" }}>
                           <input type="range" min="0" max="1" step="0.05" disabled={!on}
                             value={wv}
-                            onChange={(e) => setIndexWeight(m.slug, Number(e.target.value))} />
+                            onChange={(e) => setIndexWeight(m.key, Number(e.target.value))} />
                           <span className="wval">{wv.toFixed(2)}</span>
                         </div>
                       </div>
@@ -1356,10 +1399,10 @@ export default function App() {
       {isIndex && (
         <div className="legend">
           <div>Индекс качества городской среды, 2024 (балл)</div>
-          <div className="bar" style={{ background: `linear-gradient(90deg, ${INDEX_COLOR_STOPS.map((s) => `${s.color} ${((s.v - INDEX_DOMAIN[0]) / (INDEX_DOMAIN[1] - INDEX_DOMAIN[0]) * 100).toFixed(0)}%`).join(", ")})` }} />
-          <div className="ends"><span>0 · вне НП</span><span>223 · макс.</span></div>
+          <div className="bar" style={{ background: `linear-gradient(90deg, ${indexStops.map((s) => `${s.color} ${((s.v - indexDomain[0]) / (indexDomain[1] - indexDomain[0]) * 100).toFixed(0)}%`).join(", ")})` }} />
+          <div className="ends"><span>0 · вне НП</span><span>{Math.round(indexDomain[1])} · макс.</span></div>
           <div style={{ marginTop: 6, fontSize: 11 }}>
-Город — 171…223 балла (верх шкалы); вне контура затухание вдвое/5 км до 0. Яркость = присутствие среды
+Балл держится по площади НП, вне контура — затухание вдвое/5 км. Линейная шкала 0…макс. региона. Яркость = присутствие среды
           </div>
         </div>
       )}
