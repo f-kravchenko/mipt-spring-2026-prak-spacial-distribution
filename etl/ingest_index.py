@@ -206,12 +206,19 @@ def main():
                 r_, c_ = rj + dr, cj + dc
                 if 0 <= r_ < nrow and 0 <= c_ < ncol and dr * dr + dc * dc <= 1:
                     masks[j][r_, c_] = True
+    # подпись = НП, ВЫИГРАВШИЙ max («эффект доминирующего НП»), а не ближайший
+    # по точке: точка соседа бывает ближе центра большого НП, и ячейка внутри
+    # Сочи подписывалась «Туапсе» с сочинским баллом
     value_grid = np.zeros((nrow, ncol))
+    owner_grid = np.full((nrow, ncol), -1, int)
     for j in range(len(cities)):
         if masks[j].any():
             d_km = distance_transform_edt(~masks[j], sampling=(step, step))
-            value_grid = np.maximum(value_grid, cs[j] * 0.5 ** (d_km / HALF_KM))
+            v = cs[j] * 0.5 ** (d_km / HALF_KM)
+            owner_grid[v > value_grid] = j
+            value_grid = np.maximum(value_grid, v)
     value = value_grid[rr, cc]
+    label = np.where(owner_grid[rr, cc] >= 0, owner_grid[rr, cc], nearest)  # 0 → ближайший
 
     # контуры НП → geojson (слой «Границы НП»)
     feats = []
@@ -258,7 +265,7 @@ def main():
         y0 = round(clat[k] - dlat / 2, 5); y1 = round(clat[k] + dlat / 2, 5)
         wkt = f"POLYGON(({x0} {y0},{x1} {y0},{x1} {y1},{x0} {y1},{x0} {y0}))"
         wtr.writerow([f"ix_{rr[k]}_{cc[k]}", wkt, float(cpop[k]),
-                      round(float(value[k]), 2), cities[nearest[k]][0]] + [r2(comp[c], k) for c in cols])
+                      round(float(value[k]), 2), cities[label[k]][0]] + [r2(comp[c], k) for c in cols])
     buf.seek(0)
     cur.execute("CREATE TEMP TABLE _stg (cell_code text, wkt text, popcnt float8, value float8, "
                 "name text, " + ", ".join(f"{c} float8" for c in cols) + ") ON COMMIT DROP")
