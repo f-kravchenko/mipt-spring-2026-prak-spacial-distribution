@@ -34,7 +34,10 @@ MIGRATION = os.path.join(ROOT, "deploy/helm/spatial-masks/files/migrations/0010_
 KM = 111.32
 SIGMA_KM = 15.0   # затухание «присутствия» от города
 HALF_KM = 5.0     # полураспад балла вне контура НП (вдвое / 5 км)
-CLOSE_CELLS = 3   # смыкание фрагментов застройки в сплошной контур НП (~3 км)
+# смыкание разрозненных колец одного НП в сплошной контур. Было 3 (мостики до
+# ~6 км) — под старый источник контуров (пятна residential); с границами НП
+# кольца уже смежные, хватает 1, иначе НП раздувается.
+CLOSE_CELLS = 1
 # показатель для regression-маски при переиспользии Росстат-масок (regression
 # indicator-dependent; берём «эталон» — Отгруженные товары обрабатывающей пром.)
 REG_INDICATOR = "Y477090007"
@@ -172,26 +175,37 @@ def main():
 
     # value: балл по контуру НП + затухание, max при перекрытии
     masks = [np.zeros((nrow, ncol), bool) for _ in cities]
-    polys = json.load(open(p("footprint.json"), encoding="utf-8"))["polys"] if os.path.exists(p("footprint.json")) else []
-    for ring in polys:
+    fp = json.load(open(p("footprint.json"), encoding="utf-8")) if os.path.exists(p("footprint.json")) else {}
+    polys = fp.get("polys", [])
+    # владелец кольца приходит из fetch (кольцо = граница НП с этим именем).
+    # Фолбэк «ближайший город» — только для старых файлов без owner.
+    owner = fp.get("owner")
+    for i, ring in enumerate(polys):
         poly = Polygon(ring)
         if not poly.is_valid or poly.is_empty:
             poly = poly.buffer(0)
         if poly.is_empty:
             continue
-        ctr = poly.centroid
-        j = int(np.argmin(((cx - ctr.x) * coslat0) ** 2 + (cy - ctr.y) ** 2))
+        if owner:
+            j = owner[i]
+        else:
+            ctr = poly.centroid
+            j = int(np.argmin(((cx - ctr.x) * coslat0) ** 2 + (cy - ctr.y) ** 2))
+        # all_touched=False (центр ячейки внутри НП): с all_touched кольцо
+        # цеплялось за весь свой периметр и площадь НП росла в 3-4 раза
         masks[j] |= rasterize([(poly, 1)], out_shape=(nrow, ncol), transform=transform,
-                              fill=0, all_touched=True).astype(bool)
-    for j in range(len(cities)):  # гарантия присутствия: диск ~2 км в точке
-        rj = int((maxy - cy[j]) / dlat); cj = int((cx[j] - minx) / dlon)
-        for dr in range(-2, 3):
-            for dc in range(-2, 3):
+                              fill=0, all_touched=False).astype(bool)
+    for j in range(len(cities)):
+        if masks[j].any():
+            if not owner:  # старый источник (пятна residential) — смыкаем фрагменты
+                masks[j] = binary_fill_holes(binary_closing(masks[j], iterations=CLOSE_CELLS))
+            continue
+        rj = int((maxy - cy[j]) / dlat); cj = int((cx[j] - minx) / dlon)  # НП мельче
+        for dr in (-1, 0, 1):                                            # ячейки — крест
+            for dc in (-1, 0, 1):
                 r_, c_ = rj + dr, cj + dc
-                if 0 <= r_ < nrow and 0 <= c_ < ncol and dr * dr + dc * dc <= 4:
+                if 0 <= r_ < nrow and 0 <= c_ < ncol and dr * dr + dc * dc <= 1:
                     masks[j][r_, c_] = True
-    for j in range(len(cities)):  # смыкаем фрагменты в сплошной контур
-        masks[j] = binary_fill_holes(binary_closing(masks[j], iterations=CLOSE_CELLS))
     value_grid = np.zeros((nrow, ncol))
     for j in range(len(cities)):
         if masks[j].any():

@@ -66,8 +66,12 @@ def _road_tile_url(region_id: int) -> str:
     return f"{TILES_BASE_URL}/tile_road/{{z}}/{{x}}/{{y}}?region={region_id}"
 
 
-def _index_tile_url(region_id: int) -> str:
-    return f"{TILES_BASE_URL}/tile_index/{{z}}/{{x}}/{{y}}?region={region_id}"
+def _index_tile_url(region_id: int, ver: int) -> str:
+    # ?v= — отпечаток данных (max id индексных ячеек, растёт при каждом
+    # ingest_index). URL меняется вместе с данными, поэтому браузер не подсунет
+    # тайлы, посчитанные по прежним границам НП. tile_index лишний параметр
+    # игнорирует (0010 читает только region).
+    return f"{TILES_BASE_URL}/tile_index/{{z}}/{{x}}/{{y}}?region={region_id}&v={ver}"
 
 
 @app.get("/health")
@@ -90,6 +94,8 @@ def regions():
                 WHERE g.region_id = r.id AND g.features ? 'value') AS index_cells,
                (SELECT max((g.features->>'value')::float) FROM grid_cell g
                 WHERE g.region_id = r.id AND g.features ? 'value') AS index_max,
+               (SELECT max(g.id) FROM grid_cell g
+                WHERE g.region_id = r.id AND g.features ? 'value') AS index_ver,
                -- имена городов региона (подписи ИКГС-ячеек) — по ним ниже берём
                -- минимальный балл из реестра CITY_SCORES: сам value содержит ещё
                -- и затухание (дробные значения вплоть до ~0), он для низа шкалы не годится
@@ -108,7 +114,7 @@ def regions():
             cell_count=r["index_cells"] if r["index_cells"] else r["all_cells"],
             cities_tile_url=_city_tile_url(r["id"]) if r["has_city"] else None,
             roads_tile_url=_road_tile_url(r["id"]) if r["has_road"] else None,
-            index_tile_url=_index_tile_url(r["id"]) if r["index_cells"] else None,
+            index_tile_url=_index_tile_url(r["id"], r["index_ver"]) if r["index_cells"] else None,
             index_max=r["index_max"],
             # низ шкалы = наименьший балл города региона (по реестру CITY_SCORES)
             index_min=min((CITY_SCORES[n] for n in (r["index_names"] or [])

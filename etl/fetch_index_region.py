@@ -1,8 +1,8 @@
 """
 Сбор данных ИКГС для ЛЮБОГО региона (обобщение fetch_*_novosibirsk.py).
 Города+баллы берём из реестра (data/processed/ikgs_scores.json), координаты —
-из OSM (place-узлы в bbox региона, матчим по имени), контуры НП — OSM
-residential+place по bbox города.
+из OSM (place-узлы в bbox региона, матчим по имени), границы НП — полигоны OSM
+place=city|town того же имени.
 
 Полигон региона читаем из БД по slug (у якутского «центра» он только там).
 Оставляем города, попавшие ВНУТРЬ полигона (для «центра» отсекает дальние НП).
@@ -21,7 +21,8 @@ import time
 
 import psycopg2
 import requests
-from shapely.geometry import shape
+from shapely.geometry import LineString, shape
+from shapely.ops import linemerge, polygonize, unary_union
 from shapely.prepared import prep
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -82,34 +83,41 @@ def fetch_cities(scores, poly):
     return out
 
 
-FOOT_Q = (
-    'way["landuse"="residential"]({s},{w},{n},{e});'
-    'relation["landuse"="residential"]({s},{w},{n},{e});'
-    'way["place"~"^(city|town)$"]["name"]({s},{w},{n},{e});'
-)
-
-
-def fetch_footprints(cities):
-    """Контуры застройки вокруг каждого города (bbox ±0.12° шир.), дедуп по id."""
-    byid = {}
-    for name, lon, lat, _ in cities:
-        h = 0.18 if name in ("Москва",) else 0.12
-        s, n, w, e = lat - h, lat + h, lon - h * 1.6, lon + h * 1.6
-        n0 = len(byid)
-        for el in query(FOOT_Q.format(s=s, w=w, n=n, e=e)):
-            key = (el["type"], el["id"])
-            if key in byid:
-                continue
-            if el["type"] == "way" and el.get("geometry"):
-                byid[key] = [[round(p["lon"], 5), round(p["lat"], 5)] for p in el["geometry"]]
-            elif el["type"] == "relation":
-                for i, m in enumerate(el.get("members", [])):
-                    if m.get("role") == "outer" and m.get("geometry"):
-                        byid[("rel", el["id"], i)] = [[round(p["lon"], 5), round(p["lat"], 5)]
-                                                      for p in m["geometry"]]
-        print(f"  {name:20} +колец={len(byid)-n0}")
-        time.sleep(2)
-    return [r for r in byid.values() if len(r) >= 3]
+def fetch_footprints(cities, poly):
+    """Границы НП = полигоны OSM place=city|town, сматченные к городам реестра по
+    имени. Раньше брали ВСЮ landuse=residential в боксе ±13 км вокруг города и
+    вешали на ближайший город — в контур попадали окрестные сёла и дачи, после
+    смыкания НП раздувался до сотен км² (Верея 481 км² при реальных 7). Теперь
+    источник — сама граница НП, и кольцо сразу знает, чей оно (owner)."""
+    minx, miny, maxx, maxy = poly.bounds
+    bb = f"{miny},{minx},{maxy},{maxx}"
+    els = query(f'way["place"~"^(city|town)$"]["name"]({bb});'
+                f'relation["place"~"^(city|town)$"]["name"]({bb});', timeout=180)
+    # outer-мемберы отношения — это СЕГМЕНТЫ контура, а не готовые кольца:
+    # замыкание каждого по отдельности давало обрезки (Новосибирск 48 км² вместо
+    # 501). Сшиваем сегменты города линкой linemerge → polygonize.
+    bysegs = {}
+    for el in els:
+        segs = ([[(p["lon"], p["lat"]) for p in el["geometry"]]]
+                if el["type"] == "way" and el.get("geometry") else
+                [[(p["lon"], p["lat"]) for p in m["geometry"]]
+                 for m in el.get("members", []) if m.get("role") == "outer" and m.get("geometry")])
+        bysegs.setdefault(norm(el["tags"]["name"]), []).extend(s for s in segs if len(s) >= 2)
+    byname = {}
+    for nm, segs in bysegs.items():
+        merged = unary_union(list(polygonize(linemerge([LineString(s) for s in segs]))))
+        geoms = merged.geoms if merged.geom_type == "MultiPolygon" else ([merged] if not merged.is_empty else [])
+        byname[nm] = [[[round(x, 5), round(y, 5)] for x, y in g.exterior.coords] for g in geoms]
+    polys, owner, miss = [], [], []
+    for j, (name, lon, lat, _) in enumerate(cities):
+        rings = byname.get(norm(name)) or []
+        if not rings:
+            miss.append(name)  # ingest подставит опорный диск ~2 км в точке города
+        polys += rings
+        owner += [j] * len(rings)
+    if miss:
+        print(f"  без полигона place (будет диск ~2 км): {', '.join(miss)}")
+    return polys, owner
 
 
 def main():
@@ -129,10 +137,11 @@ def main():
     json.dump(cities, open(os.path.join(ROOT, f"data/processed/{a.region}_cities.json"),
                            "w", encoding="utf-8"), ensure_ascii=False)
 
-    polys = fetch_footprints(cities)
-    json.dump({"polys": polys}, open(os.path.join(ROOT, f"data/processed/{a.region}_footprint.json"),
-                                     "w", encoding="utf-8"))
-    print(f"→ контуров {len(polys)}")
+    polys, owner = fetch_footprints(cities, poly)
+    json.dump({"polys": polys, "owner": owner},
+              open(os.path.join(ROOT, f"data/processed/{a.region}_footprint.json"), "w",
+                   encoding="utf-8"))
+    print(f"→ контуров {len(polys)} у {len(set(owner))}/{len(cities)} НП")
 
 
 if __name__ == "__main__":
