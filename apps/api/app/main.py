@@ -90,6 +90,11 @@ def regions():
                 WHERE g.region_id = r.id AND g.features ? 'value') AS index_cells,
                (SELECT max((g.features->>'value')::float) FROM grid_cell g
                 WHERE g.region_id = r.id AND g.features ? 'value') AS index_max,
+               -- имена городов региона (подписи ИКГС-ячеек) — по ним ниже берём
+               -- минимальный балл из реестра CITY_SCORES: сам value содержит ещё
+               -- и затухание (дробные значения вплоть до ~0), он для низа шкалы не годится
+               (SELECT array_agg(DISTINCT g.features->>'name') FROM grid_cell g
+                WHERE g.region_id = r.id AND g.features ? 'value') AS index_names,
                EXISTS(SELECT 1 FROM city  c WHERE c.region_id = r.id) AS has_city,
                EXISTS(SELECT 1 FROM road  d WHERE d.region_id = r.id) AS has_road
         FROM region r ORDER BY r.id
@@ -105,6 +110,9 @@ def regions():
             roads_tile_url=_road_tile_url(r["id"]) if r["has_road"] else None,
             index_tile_url=_index_tile_url(r["id"]) if r["index_cells"] else None,
             index_max=r["index_max"],
+            # низ шкалы = наименьший балл города региона (по реестру CITY_SCORES)
+            index_min=min((CITY_SCORES[n] for n in (r["index_names"] or [])
+                           if n in CITY_SCORES), default=None),
         )
         for r in rows
     ]

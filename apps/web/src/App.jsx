@@ -83,12 +83,35 @@ const RF_BOUNDS = [[18, 40], [180, 82]]; // вид всей РФ (для мин�
 // имя показателя) приходят с бэка — /api/index-config (fetchIndexConfig); здесь
 // только ОТОБРАЖЕНИЕ (палитра/гамма), не справочные данные.
 const INDEX_STOPS = DIST_STOPS;
-// Линейная шкала покраски от 0 до максимума региона (домен приходит в
-// indexDomain). Позиции стопов (value, цвет) делятся между заливкой и легендой.
-const indexColorStops = (domain) => INDEX_STOPS.map((color, i) => ({
-  color,
-  v: domain[0] + (domain[1] - domain[0]) * i / (INDEX_STOPS.length - 1),
-}));
+// Позиции цветовых стопов (value, цвет) по домену — делятся между заливкой и
+// легендой. Линейная — равномерно; логарифмическая — геометрически (лог даёт
+// больше оттенков низким значениям — затуханию; 0 → первый цвет). MapLibre не
+// умеет log в выражении, поэтому лог-шкалу приближаем позициями стопов.
+// gamma=1 — линейная (равные шаги цвета = равные шаги балла); gamma>1 сгущает
+// стопы к низу диапазона, поэтому затухание получает больше оттенков.
+const INDEX_GAMMA = 2;
+// Доля палитры, отданная затуханию (0..мин. балл города) в режиме «по городам».
+// Остальное — полосе городов: иначе все города (171..223 из 0..223) попадают в
+// верхние 12-23% рампы и выглядят одинаково тёпло-красными.
+const INDEX_CITY_SPLIT = 0.25;
+const indexColorStops = (domain, mode, cityLo) => {
+  const [lo, hi] = domain, n = INDEX_STOPS.length;
+  const pos = (i) => i / (n - 1);
+  // кусочная: 0..cityLo → холодные INDEX_CITY_SPLIT рампы, cityLo..hi → остальное
+  if (mode === "city" && Number.isFinite(cityLo) && cityLo > lo && cityLo < hi) {
+    return INDEX_STOPS.map((color, i) => {
+      const p = pos(i);
+      return {
+        color,
+        v: p <= INDEX_CITY_SPLIT
+          ? lo + (cityLo - lo) * (p / INDEX_CITY_SPLIT)
+          : cityLo + (hi - cityLo) * (p - INDEX_CITY_SPLIT) / (1 - INDEX_CITY_SPLIT),
+      };
+    });
+  }
+  const gamma = mode === "gamma" ? INDEX_GAMMA : 1;
+  return INDEX_STOPS.map((color, i) => ({ color, v: lo + (hi - lo) * Math.pow(pos(i), gamma) }));
+};
 // Подсказка над «i» маски присутствия — из полей контракта (с бэка).
 const indexMaskTip = (m) => [
   m.signal, m.source && `Источник: ${m.source}`, m.formula && `Формула: ${m.formula}`,
@@ -332,14 +355,25 @@ export default function App() {
   // региональный показатель) — селектор меняет только окраску и подписи.
   const [scaleMode, setScaleMode] = useState(initState.scaleMode);
   const [globalScale, setGlobalScale] = useState(null); // {p99, national_total}
+  // Тип цветовой шкалы индекса: линейная / логарифмическая (лог растягивает низ).
+  const [indexScale, setIndexScale] = useState(
+    ["city", "gamma", "linear"].includes(initState.indexScale) ? initState.indexScale
+      : initState.indexScale === "log" ? "gamma" : "city");
 
-  // Шкала индекса. «Территория» — 0..максимум региона (index_max); «Россия» —
-  // 0..максимум балла по всем индекс-регионам (одинаковый цвет = одинаковый балл).
-  const indexMax = regions.find((r) => r.id === regionId)?.index_max;
-  const indexMaxRF = Math.max(0, ...regions.map((r) => r.index_max || 0));
-  const indexDomain = [0, (scaleMode === "russia" ? indexMaxRF : indexMax)
-    || indexConfig?.domain?.[1] || 223];
-  const indexStops = indexColorStops(indexDomain);
+  // Шкала индекса: 0..максимум (вне контура НП балл затухает до ~0, поэтому низ
+  // шкалы — 0, а не минимальный балл города; сам минимум показываем в легенде
+  // как границу «городской» полосы). «Россия» — максимум по всем индекс-регионам:
+  // одинаковый цвет = одинаковый балл.
+  const idxReg = regions.find((r) => r.id === regionId);
+  const idxWith = regions.filter((r) => r.index_max);
+  const domainHi = scaleMode === "russia"
+    ? Math.max(0, ...idxWith.map((r) => r.index_max || 0))
+    : idxReg?.index_max;
+  const cityLo = scaleMode === "russia"
+    ? Math.min(...idxWith.map((r) => r.index_min || Infinity))
+    : idxReg?.index_min;
+  const indexDomain = [0, domainHi || indexConfig?.domain?.[1] || 223];
+  const indexStops = indexColorStops(indexDomain, indexScale, cityLo);
 
   // p99 другого показателя — не наша шкала: сбрасываем, чтобы карта не красилась
   // по чужому домену, пока едет свежий ответ (легенда покажет "считаем…").
@@ -654,14 +688,14 @@ export default function App() {
           regionId, indicator, scaleMode,
           savedByIndicator: savedByIndicatorRef.current,
           peakShare, showPeaks, showStructure, decay, showCities, showRoads, showBorders,
-          indexWeights: appliedIndexW,
+          indexScale, indexWeights: appliedIndexW,
         }));
       } catch { /* приватный режим — просто без памяти */ }
     }, 500);
     return () => clearTimeout(persistDebounceRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [regionId, indicator, scaleMode, peakShare, showPeaks, showStructure,
-      decay, showCities, showRoads, showBorders, weights, appliedIndexW]);
+      decay, showCities, showRoads, showBorders, indexScale, weights, appliedIndexW]);
 
   useEffect(() => {
     if (regionId == null || !indicator) return;
@@ -989,15 +1023,17 @@ export default function App() {
     return () => { map.off("idle", done); clearTimeout(t); };
   }, [mapReady, appliedIndexW, indexConfig]);
 
-  // Смена масштаба (Территория/Россия) → мгновенная перекраска шкалы индекса
-  // (setPaintProperty, без пересоздания источника — как у grid-распределения).
+  // Смена масштаба (Территория/Россия) или типа шкалы (линейная/лог) → мгновенная
+  // перекраска (setPaintProperty, без пересоздания источника).
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady || !map.getLayer("nsk-index-fill")) return;
     map.setPaintProperty("nsk-index-fill", "fill-color",
       ["interpolate", ["linear"], ["get", "value"], ...indexStops.flatMap((s) => [s.v, s.color])]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapReady, scaleMode, indexConfig, regionId]);
+    // regions — в зависимостях: домен шкалы берётся из index_min/index_max
+    // региона, иначе поздняя загрузка /api/regions разошлась бы с легендой
+  }, [mapReady, scaleMode, indexScale, indexConfig, regionId, regions]);
 
   // Линии концентрации между пиками (ТЗ п.5) + точки-пики, поверх всего
   // (RANK.structure — выше городов). Реальные GeoJSON-фичи, не векторные
@@ -1167,6 +1203,29 @@ export default function App() {
                   среды»: население (WorldPop) + POI и зелень (OSM) + близость к
                   дорогам/ж-д/ЛЭП + затухание к городу. Наведите курсор —
                   ближайший город и балл в точке.
+                </div>
+              </div>
+            )}
+
+            {isIndex && (
+              <div className="section">
+                <label>Шкала цвета</label>
+                <div className="scale-toggle">
+                  <button
+                    className={indexScale === "city" ? "on" : ""}
+                    title="По городам: затуханию отдана холодная четверть палитры, полосе баллов городов — остальные 75%, поэтому города различимы по цвету"
+                    onClick={() => setIndexScale("city")}
+                  >По городам</button>
+                  <button
+                    className={indexScale === "linear" ? "on" : ""}
+                    title="Линейная: равные шаги цвета — равные шаги балла (города занимают лишь верх рампы)"
+                    onClick={() => setIndexScale("linear")}
+                  >Линейная</button>
+                  <button
+                    className={indexScale === "gamma" ? "on" : ""}
+                    title="Нелинейная (gamma=2): стопы сгущены к низу — затухание получает больше оттенков"
+                    onClick={() => setIndexScale("gamma")}
+                  >γ=2</button>
                 </div>
               </div>
             )}
@@ -1399,10 +1458,20 @@ export default function App() {
       {isIndex && (
         <div className="legend">
           <div>Индекс качества городской среды, 2024 (балл)</div>
-          <div className="bar" style={{ background: `linear-gradient(90deg, ${indexStops.map((s) => `${s.color} ${((s.v - indexDomain[0]) / (indexDomain[1] - indexDomain[0]) * 100).toFixed(0)}%`).join(", ")})` }} />
-          <div className="ends"><span>0 · вне НП</span><span>{Math.round(indexDomain[1])} · макс.</span></div>
+          {/* Полоса рисуется ПО ПАЛИТРЕ (равная ширина на цветовой шаг), а не по
+              оси значений: при нелинейных шкалах именно так видно, какая доля
+              палитры кому досталась. Подписи под полосой — фактические границы
+              баллов, поэтому легенда соответствует раскраске карты. */}
+          <div className="bar" style={{ background: `linear-gradient(90deg, ${indexStops.map((s, i) => `${s.color} ${(i / (indexStops.length - 1) * 100).toFixed(0)}%`).join(", ")})` }} />
+          <div className="ends" style={{ display: "flex", justifyContent: "space-between" }}>
+            {indexStops.map((s, i) => <span key={i}>{Math.round(s.v)}</span>)}
+          </div>
           <div style={{ marginTop: 6, fontSize: 11 }}>
-Балл держится по площади НП, вне контура — затухание вдвое/5 км. Линейная шкала 0…макс. региона. Яркость = присутствие среды
+            {Number.isFinite(cityLo) && <>Город — {Math.round(cityLo)}…{Math.round(indexDomain[1])} балла (верх шкалы); </>}
+            вне контура затухание вдвое/5 км до 0. Шкала {
+              indexScale === "city" ? "по городам (75% палитры — полосе городов)"
+                : indexScale === "gamma" ? "нелинейная (γ=2)" : "линейная"}
+            {scaleMode === "russia" ? ", единая по РФ" : ""}. Яркость = присутствие среды
           </div>
         </div>
       )}
