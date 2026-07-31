@@ -7,6 +7,12 @@ class Region(BaseModel):
     name: str
     bbox: list[float]  # [minx, miny, maxx, maxy]
     cell_count: int
+    # У региона могут лежать ОБА набора ячеек: росстатовский (маски+композиции) и
+    # ИКГС (features->'value'). Режим выбирается показателем, а не регионом,
+    # поэтому фронту нужны оба счётчика: от них зависит база LQ-шкалы
+    # (итог/ячейки) — взять не тот набор значит перекосить всю покраску.
+    grid_cells: int = 0    # росстатовские ячейки; 0 — показателей у региона нет
+    index_cells: int = 0   # ИКГС-ячейки; 0 — индекса у региона нет
     cities_tile_url: str | None = None  # шаблон {z}/{x}/{y}, если у региона есть города
     roads_tile_url: str | None = None   # шаблон {z}/{x}/{y}, если у региона есть дороги
     # шаблон тайлов tile_index, если регион — индексный (ячейки несут
@@ -56,6 +62,10 @@ class RecomputeResult(BaseModel):
     value_max: float | None = None
     regional_value: float | None = None
     metrics: dict[str, float]
+    # Что означает value ячейки: "absolute" — величина в единицах показателя
+    # (доля регионального итога, Σ по ячейкам = итог), "score" — балл 0..100
+    # (нормировка удельного показателя, суммировать нельзя).
+    value_kind: str = "absolute"
     # Порог "пика" на суммарном слое (top 5% ненулевых ячеек, percentile_cont
     # в _AGG_SQL). Уже в единицах распределения (масштабирован тем же rv/total, что и
     # value_max) — фронт сравнивает ["get","value"] >= peak_threshold в

@@ -82,6 +82,10 @@ const RF_BOUNDS = [[18, 40], [180, 82]]; // вид всей РФ (для мин�
 // распределений в других регионах. Домен и справочники (маски, баллы городов,
 // имя показателя) приходят с бэка — /api/index-config (fetchIndexConfig); здесь
 // только ОТОБРАЖЕНИЕ (палитра/гамма), не справочные данные.
+// Псевдокод показателя-индекса в выпадашке. ИКГС не лежит в таблице indicator
+// (он не сумма-сохраняемый, значение уже в ячейке), поэтому в общем списке
+// показателей он представлен этим сентинелом.
+const IDX_CODE = "idx";
 const INDEX_STOPS = DIST_STOPS;
 // Позиции цветовых стопов (value, цвет) по домену — делятся между заливкой и
 // легендой. Линейная — равномерно; логарифмическая — геометрически (лог даёт
@@ -403,10 +407,23 @@ export default function App() {
   // Территория: база своего региона; Россия: общая база по всем регионам
   // (base_cell из /api/global-scale) — цвета сопоставимы между регионами.
   const LQ_MULTS = [0, 0.5, 1, 4, 16]; // множители базы для DIST_STOPS
-  const selRegionCells = regions.find((r) => r.id === regionId)?.cell_count ?? 0;
-  const territoryBase = liveComp?.regional_value > 0 && selRegionCells > 0
+  // Режим определяет ВЫБРАННЫЙ ПОКАЗАТЕЛЬ, а не регион: у региона могут лежать
+  // оба набора ячеек (Росстат + ИКГС), и раньше при непустом index_tile_url
+  // выпадашка схлопывалась до одного ИКГС — все росстатовские показатели
+  // становились недостижимы, как только индекс залили во все регионы.
+  const idxReg2 = regions.find((r) => r.id === regionId);
+  const isIndex = indicator === IDX_CODE;
+  const selRegionCells = (isIndex ? idxReg2?.index_cells : idxReg2?.grid_cells) ?? 0;
+  // LQ-шкала осмысленна только для объёмных показателей: база = итог/ячейки.
+  // У удельных (value_kind: score) значение — балл 0..100, а «база» вышла бы
+  // 8.5/141967 ≈ 0.00006, и каждая ячейка оказалась бы >16× базы — карта
+  // целиком в верхнем цвете. База null включает линейный фолбэк 0..vmax ниже
+  // (он же снимает строку «Концентрация ×» в тултипе); 0..100 и так сравнимы
+  // между регионами, поэтому режим «Россия» для них ничего не меняет.
+  const isScoreKind = liveComp?.value_kind === "score";
+  const territoryBase = !isScoreKind && liveComp?.regional_value > 0 && selRegionCells > 0
     ? liveComp.regional_value / selRegionCells : null;
-  const distBase = scaleMode === "russia" && globalScale?.base_cell > 0
+  const distBase = !isScoreKind && scaleMode === "russia" && globalScale?.base_cell > 0
     ? globalScale.base_cell : territoryBase;
   const distVmax = liveComp?.value_max > 0 ? liveComp.value_max : 1;
   // для тултипа: читается из хендлера hover через ref, чтобы смена режима
@@ -417,7 +434,8 @@ export default function App() {
   const distFillColor = (base) => ["interpolate", ["linear"], ["get", "value"],
     ...(base > 0
       ? LQ_MULTS.flatMap((m, i) => [base * m, DIST_STOPS[i]])
-      // фолбэк, пока база не готова: старая линейная шкала 0..vmax
+      // линейная 0..vmax — пока база не готова, а для удельных показателей
+      // (base всегда null) это основной режим: деления 0/25/50/75/100 балла
       : DIST_STOPS.flatMap((c, i) => [distVmax * i / (DIST_STOPS.length - 1), c]))];
 
   // Переключение Территория/Россия меняет ТОЛЬКО paint-свойство готового слоя
@@ -507,12 +525,30 @@ export default function App() {
         // существуют в справочниках (данные могли смениться) — иначе дефолт.
         if (rg.length)
           setRegionId(rg.some((r) => r.id === initState.regionId) ? initState.regionId : rg[0].id);
-        if (ind.length)
-          setIndicator(ind.some((i) => i.code === initState.indicator) ? initState.indicator : ind[0].code);
+        // IDX_CODE — валидный выбор наравне с кодами Росстата (эффект ниже
+        // всё равно поправит, если у региона нужного набора ячеек нет)
+        if (initState.indicator === IDX_CODE || ind.some((i) => i.code === initState.indicator))
+          setIndicator(initState.indicator);
+        else
+          setIndicator(IDX_CODE);
       }
     );
     return () => { map.remove(); locator.remove(); };
   }, []);
+
+  // Показатель должен существовать у выбранного региона: у НСО нет
+  // росстатовских ячеек, у будущих регионов может не быть ИКГС. Иначе выпадашка
+  // пустая, а режим считается по несуществующему набору.
+  useEffect(() => {
+    const reg = regions.find((r) => r.id === regionId);
+    if (!reg || (!indicators.length && !reg.index_tile_url)) return;
+    const hasIdx = reg.index_tile_url != null;
+    const hasGrid = reg.grid_cells > 0 && indicators.length > 0;
+    const ok = indicator === IDX_CODE
+      ? hasIdx
+      : hasGrid && indicators.some((i) => i.code === indicator);
+    if (!ok) setIndicator(hasIdx ? IDX_CODE : hasGrid ? indicators[0].code : null);
+  }, [regionId, regions, indicators, indicator]);
 
   // Центрирование на регионе: показываем только выбранный регион
   useEffect(() => {
@@ -571,7 +607,7 @@ export default function App() {
   // считается один раз при их смене и кэшируется в baselineComp (в памяти).
   const baseSeqRef = useRef(0);
   useEffect(() => {
-    if (regions.find((r) => r.id === regionId)?.index_tile_url) { setBaselineComp(null); return; }
+    if (indicator === IDX_CODE) { setBaselineComp(null); return; }
     const bslug = masks.find((m) => m.is_baseline)?.slug;
     if (regionId == null || !indicator || !bslug) { setBaselineComp(null); return; }
     const seq = ++baseSeqRef.current;
@@ -656,9 +692,9 @@ export default function App() {
   const presetRef = useRef(presetId);
   presetRef.current = presetId;
   useEffect(() => {
-    // Индекс-регион (index_tile_url): grid-слой не считается (нет масок/суммы) —
-    // гасим живые данные, рисует отдельный эффект nsk-index ниже.
-    if (regions.find((r) => r.id === regionId)?.index_tile_url) {
+    // Режим ИКГС: grid-слой не считается (нет масок/суммы) — гасим живые
+    // данные, рисует отдельный эффект nsk-index ниже.
+    if (indicator === IDX_CODE) {
       setLiveComp(null); setStructure(null); return;
     }
     if (regionId == null || !indicator) return;
@@ -776,13 +812,20 @@ export default function App() {
     const onMove = (e) => {
       const v = Number(e.features[0].properties.value);
       map.getCanvas().style.cursor = "pointer";
+      // Удельный показатель (value_kind: score) — балл 0..100, а не величина в
+      // единицах показателя: доли от регионального/национального итога для него
+      // не имеют смысла (ставку по ячейкам не складывают), поэтому не показываем.
+      const isScore = dist.value_kind === "score";
       const unit = indMeta?.unit ? ` ${indMeta.unit}` : "";
-      const rows = [`Абсолютно: <b>${fmt(v)}</b>${unit}`];
+      const rows = isScore
+        ? [`Балл: <b>${fmt(v)}</b> из 100`,
+           `Показатель по региону: ${fmt(dist.regional_value)}${unit}`]
+        : [`Абсолютно: <b>${fmt(v)}</b>${unit}`];
       if (distBaseRef.current > 0)
         rows.push(`Концентрация: ×${fmt(v / distBaseRef.current)} базовой`);
-      if (dist.regional_value > 0)
+      if (!isScore && dist.regional_value > 0)
         rows.push(`Доля территории: ${fmt((v / dist.regional_value) * 100)}%`);
-      if (indMeta?.national_total > 0)
+      if (!isScore && indMeta?.national_total > 0)
         rows.push(`Доля России: ${fmt((v / indMeta.national_total) * 100)}%`);
       hoverPopup.setLngLat(e.lngLat).setHTML(rows.join("<br>")).addTo(map);
     };
@@ -843,7 +886,7 @@ export default function App() {
       dropLayer(map, ranks, `mask-${m.slug}-peak-outline`);
       dropLayer(map, ranks, `mask-${m.slug}-fill`, `mask-${m.slug}`);
     }
-    if (regions.find((r) => r.id === regionId)?.index_tile_url) return; // у индекс-региона масок нет
+    if (indicator === IDX_CODE) return; // у ИКГС масок-слоёв нет
     for (const m of masks) {
       const st = maskState[m.slug];
       if (!st || !st.visible) continue;
@@ -906,7 +949,7 @@ export default function App() {
     if (!map || !mapReady) return;
     dropLayer(map, ranks, "nsk-cities-line", "nsk-cities");
     const reg = regions.find((r) => r.id === regionId);
-    if (!reg || !reg.index_tile_url || !showBorders) return;
+    if (!reg || indicator !== IDX_CODE || !showBorders) return;
     map.addSource("nsk-cities", { type: "geojson", data: `/${reg.slug}_npcontours.geojson` });
     addOrdered(map, ranks, {
       id: "nsk-cities-line", type: "line", source: "nsk-cities",
@@ -917,7 +960,7 @@ export default function App() {
         "line-opacity": 0.85,
       },
     }, RANK.road);
-  }, [mapReady, regionId, regions, showBorders]);
+  }, [mapReady, regionId, regions, showBorders, indicator]);
 
   // Города (поверх всего). Переключение не трогает другие слои.
   useEffect(() => {
@@ -951,7 +994,7 @@ export default function App() {
     dropLayer(map, ranks, "nsk-region-line");
     dropLayer(map, ranks, "nsk-region-bg", "nsk-region");
     const reg = regions.find((r) => r.id === regionId);
-    if (!reg || !reg.index_tile_url) return;
+    if (!reg || !reg.index_tile_url || indicator !== IDX_CODE) return;
 
     // Светлая подложка области (под сеткой) + контур сверху.
     map.addSource("nsk-region", { type: "geojson", data: `/${reg.slug}_border.geojson` });
@@ -1001,7 +1044,7 @@ export default function App() {
       map.off("mouseleave", "nsk-index-fill", onLeave);
       hoverPopup.remove();
     };
-  }, [mapReady, regionId, regions, indexConfig]);
+  }, [mapReady, regionId, regions, indexConfig, indicator]);
 
   // Применение ПРИМЕНЁННЫХ весов (по кнопке «Пересчитать»): перекраска
   // fill-opacity готового слоя (без пересоздания источника — как переключатель
@@ -1114,18 +1157,24 @@ export default function App() {
 
   const contract = masks.find((m) => m.slug === contractSlug);
   const selRegion = regions.find((r) => r.id === regionId);
-  const isIndex = selRegion?.index_tile_url != null;
   const active = liveComp;  // распределение всегда живое
 
   // Легенда: шкала в кратных базовой концентрации (base = показатель /
   // число ячеек — значение ячейки при равномерном размазывании). Жёлтая
   // середина = ×1 базы; тёплые ступени лог-кратные (×4, ≥×16).
   const rfReady = scaleMode === "russia" && globalScale?.base_cell > 0;
-  const legendTitle = rfReady
+  // У удельного показателя шкала линейная 0..100 (база LQ для него не считается),
+  // поэтому и подпись, и деления другие — иначе легенда обещает кратные базы,
+  // которых на карте нет.
+  const legendTitle = isScoreKind
+    ? "Балл 0…100 (нормировка удельного показателя)"
+    : rfReady
     ? `Концентрация к базе РФ (${fmt(globalScale.base_cell)}/ячейку)`
     : scaleMode === "russia" ? "Распределение — считаем базу РФ…"
     : `Концентрация к базе территории${distBase > 0 ? ` (${fmt(distBase)}/ячейку)` : ""}`;
-  const legendMults = ["0", "×0.5", "×1", "×4", "≥×16"];
+  const legendMults = isScoreKind
+    ? ["0", "25", "50", "75", "100"]
+    : ["0", "×0.5", "×1", "×4", "≥×16"];
 
   return (
     <div className="app">
@@ -1154,7 +1203,8 @@ export default function App() {
               <select value={regionId ?? ""} onChange={(e) => setRegionId(Number(e.target.value))}>
                 {regions.map((r) => (
                   <option key={r.id} value={r.id}>
-                    {`${r.name} (${r.cell_count} ячеек)`}
+                    {/* ячеек в НАБОРЕ текущего режима: у региона их два */}
+                    {`${r.name} (${(isIndex ? r.index_cells : r.grid_cells) || r.cell_count} ячеек)`}
                   </option>
                 ))}
               </select>
@@ -1180,17 +1230,16 @@ export default function App() {
 
             <div className="section">
               <label>Показатель</label>
-              {isIndex ? (
-                <select value="idx" disabled>
-                  <option value="idx">{indexName}</option>
-                </select>
-              ) : (
-                <select value={indicator ?? ""} onChange={(e) => setIndicator(e.target.value)}>
-                  {indicators.map((i) => (
-                    <option key={i.code} value={i.code}>{i.name}</option>
-                  ))}
-                </select>
-              )}
+              {/* ИКГС и росстатовские показатели в ОДНОМ списке: у региона могут
+                  быть оба набора ячеек, выбор показателя и переключает режим */}
+              <select value={indicator ?? ""} onChange={(e) => setIndicator(e.target.value)}>
+                {selRegion?.index_tile_url && (
+                  <option value={IDX_CODE}>{indexName}</option>
+                )}
+                {selRegion?.grid_cells > 0 && indicators.map((i) => (
+                  <option key={i.code} value={i.code}>{`${i.code} · ${i.name}`}</option>
+                ))}
+              </select>
             </div>
 
             {isIndex && (
@@ -1499,8 +1548,13 @@ function Metrics({ comp }) {
     <div className="metrics" style={{ marginTop: 10 }}>
       <table>
         <tbody>
-          <tr><td>Сумма сохранена</td><td className={comp.sum_preserved ? "ok" : "bad"}>{comp.sum_preserved ? "да" : "нет"}</td></tr>
-          <tr><td>Ошибка суммы</td><td>{fmt(m.sum_error)}</td></tr>
+          {/* инвариант суммы существует только для объёмных показателей: у
+              удельных (value_kind: score) API не присылает sum_error, и
+              заявлять «сумма сохранена» было бы неправдой */}
+          {m.sum_error != null && <>
+            <tr><td>Сумма сохранена</td><td className={comp.sum_preserved ? "ok" : "bad"}>{comp.sum_preserved ? "да" : "нет"}</td></tr>
+            <tr><td>Ошибка суммы</td><td>{fmt(m.sum_error)}</td></tr>
+          </>}
           <tr><td>Джини</td><td>{fmt(m.gini)}</td></tr>
           <tr><td>Top-10% доля</td><td>{m.top10_share != null ? (m.top10_share * 100).toFixed(1) + "%" : "—"}</td></tr>
         </tbody>

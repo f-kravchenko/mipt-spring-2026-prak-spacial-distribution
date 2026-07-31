@@ -26,6 +26,7 @@ from src.masks import (
     road_network, road_traveltime, railway, power,
 )
 from src.masks import metrics
+from src.masks.pipeline import UndefinedMaskSet
 
 # Реестр масок: pipeline-ключ -> (модуль, зависит ли от показателя).
 # Веса считаются в python по столбцам сетки (load_mask_values).
@@ -213,6 +214,14 @@ def load_mask_values(engine, grid, code_to_id, slug_to_id, indicators, params):
         mask_id = slug_to_id[key]
         if indicator_dependent:
             for code in indicators:
+                # regression = pop^эластичность; у показателей без подобранной
+                # эластичности (indicator_type: general) маска не определена —
+                # пропускаем её, а не валим ингест целиком. Остальные маски
+                # (baseline/worldpop/distance/слой-маски) от показателя не зависят
+                # и работают как обычно.
+                if key == 'regression' and code not in regression.ELASTICITIES:
+                    print(f"  regression: нет эластичности для {code} — маска пропущена")
+                    continue
                 w = compute_mask_weights(key, grid, code, params)
                 records.append(pd.DataFrame({
                     'mask_id': mask_id, 'indicator_code': code,
@@ -322,7 +331,11 @@ def load_compositions(engine, region_id, grid, code_to_id, regional_values, cfg)
 
     for code, regional_value in regional_values.items():
         for conf in cfg['ablation']:
-            res = composition_run(grid, regional_value, code, conf, params)
+            try:
+                res = composition_run(grid, regional_value, code, conf, params)
+            except UndefinedMaskSet as e:
+                print(f"  {code}/{conf['label']}: пропуск — {e}")
+                continue
             values = res['values']
             with engine.begin() as conn:
                 comp_id = conn.execute(text("""
@@ -365,6 +378,26 @@ def load_cities(engine, region_id, csv_path):
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM city WHERE region_id=:r"), {'r': region_id})
         gdf.to_postgis('city', conn, if_exists='append', index=False)
+    return len(gdf)
+
+
+def load_roads_infra(engine, region_id, infra_path):
+    """Дороги из <slug>_infra.json (road_lines: {h: highway, c: [[lon,lat],…]}).
+    Тот же формат таблицы road, что у graphml-пути — маска дорожной сети
+    считается в PostGIS по классам highway и не различает источник."""
+    lines = json.load(open(infra_path, encoding='utf-8')).get('road_lines', [])
+    rows = [{'highway': ln.get('h') or None,
+             'geom': shapely_wkt.loads(
+                 'LINESTRING(' + ','.join(f'{x} {y}' for x, y in ln['c']) + ')')}
+            for ln in lines if len(ln.get('c', [])) >= 2]
+    if not rows:
+        return 0
+    gdf = gpd.GeoDataFrame(rows, geometry='geom', crs=4326)
+    gdf['highway'] = gdf['highway'].astype('string')
+    gdf['region_id'] = region_id
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM road WHERE region_id=:r"), {'r': region_id})
+        gdf.to_postgis('road', conn, if_exists='append', index=False, chunksize=5000)
     return len(gdf)
 
 
@@ -462,6 +495,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--config', default='etl/config.yaml')
     ap.add_argument('--database-url', default=os.environ.get('DATABASE_URL'))
+    # Правка метаданных показателя (indicator_type, unit, эластичность) не требует
+    # перезаливки сеток и композиций — а полный прогон это ~15 минут и снос
+    # ИКГС-ячеек (регион пересоздаётся). load_indicators идемпотентен (upsert).
+    ap.add_argument('--indicators-only', action='store_true',
+                    help='обновить только справочник показателей и выйти')
+    # Прогон региона переливает его целиком (регион пересоздаётся), поэтому
+    # обычно нужен ровно один — не трогая уже загруженные.
+    ap.add_argument('--region', action='append', metavar='SLUG',
+                    help='грузить только эти регионы (можно повторять)')
     args = ap.parse_args()
 
     if not args.database_url:
@@ -471,11 +513,20 @@ def main():
     engine = create_engine(args.database_url)
 
     load_indicators(engine, cfg['indicators'], cfg['rosstat_parquet'], cfg['year'])
+    if args.indicators_only:
+        print(f"справочник показателей обновлён ({len(cfg['indicators'])}), выход")
+        return
     slug_to_id = register_masks(engine)
     params = {'city_sigma_km': cfg['distances']['city_sigma_km'],
               'center_sigma_km': cfg['distances']['center_sigma_km']}
 
-    for reg in cfg['regions']:
+    todo = cfg['regions']
+    if args.region:
+        todo = [r for r in todo if r['slug'] in args.region]
+        missing = set(args.region) - {r['slug'] for r in todo}
+        if missing:
+            sys.exit(f"нет в конфиге: {', '.join(sorted(missing))}")
+    for reg in todo:
         print(f"[{reg['slug']}] загрузка границы и сетки…")
         region_id = upsert_region(engine, reg)
         grid, code_to_id = load_grid(engine, region_id, reg['grid'])
@@ -495,8 +546,14 @@ def main():
 
         if reg.get('cities'):
             print(f"  городов: {load_cities(engine, region_id, reg['cities'])}")
+        # дороги: osmnx-graphml либо road_lines из infra.json (его собирает
+        # etl.fetch_infra_* для ИКГС-регионов — те же way с тегом highway,
+        # graphml для них не готовили)
         if reg.get('roads'):
             print(f"  дорог: {load_roads(engine, region_id, reg['roads'])}")
+        elif reg.get('roads_infra'):
+            print(f"  дорог: {load_roads_infra(engine, region_id, reg['roads_infra'])}")
+        if reg.get('roads') or reg.get('roads_infra'):
             # маска дорожной сети считается по таблице road — только если дороги есть
             n = load_road_network_mask(engine, region_id, slug_to_id['road_network'])
             print(f"  маска дорог: {n} ячеек")

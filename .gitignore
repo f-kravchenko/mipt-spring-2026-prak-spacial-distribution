@@ -13,6 +13,15 @@ data/processed/*.tif
 # воспроизводим без скачивания 194 МБ национального растра (см. clip-скрипт)
 !data/processed/novosibirsk_ikgs_pop.tif
 
+# Сетки МО/Краснодара/Якутии лежат в репозитории (39-48 МБ), но НСО — 148 МБ:
+# 550 тыс. ячеек против 142-186 тыс., это выше жёсткого лимита GitHub (100 МБ),
+# пуш был бы отклонён. Воспроизводится за пару минут:
+#   DATABASE_URL=... python -m etl.build_grid --region novosibirsk_ikgs \
+#       --name novosibirsk --center Новосибирск
+# всё, что нужно, в репозитории есть: полигон региона в БД,
+# novosibirsk_ikgs_pop.tif и novosibirsk_ikgs_cities.json.
+data/processed/grid_novosibirsk_1km_features.gpkg
+
 # Сервис
 node_modules/
 apps/web/dist/

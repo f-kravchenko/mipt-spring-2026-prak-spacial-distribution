@@ -10,6 +10,10 @@ from src.masks import (
 )
 
 
+class UndefinedMaskSet(ValueError):
+    """Ни одна маска набора не определена для этого показателя (нечем считать)."""
+
+
 AVAILABLE_MASKS = {
     'baseline': baseline.compute_baseline_mask,
     'worldpop': worldpop.compute_worldpop_mask,
@@ -72,6 +76,21 @@ def run_pipeline(grid, regional_value, indicator_code, mask_weights=None, masks_
         masks_to_use = list(mask_weights.keys())
     if params is None:
         params = {}
+
+    # regression = pop^эластичность: без подобранной эластичности (показатели
+    # indicator_type: general) маска не определена. resolve_weights её и не
+    # берёт, но явный masks_to_use (ablation-пресеты etl/config.yaml) перечисляет
+    # маски жёстко — выкидываем её и перенормируем остаток, чтобы Σ весов = 1.
+    if 'regression' in (masks_to_use or ()) and indicator_code not in regression.ELASTICITIES:
+        masks_to_use = [m for m in masks_to_use if m != 'regression']
+        if not masks_to_use:
+            raise UndefinedMaskSet(
+                f"набор масок пуст для {indicator_code}: только regression, "
+                "а эластичность не подобрана")
+        if mask_weights:
+            mask_weights = {k: v for k, v in mask_weights.items() if k != 'regression'}
+            total = sum(mask_weights.values())
+            mask_weights = {k: v / total for k, v in mask_weights.items()} if total else None
 
     masks = compute_all_masks(grid, indicator_code, masks_to_use, params)
     composed = composition.weighted_sum_composition(masks, mask_weights)

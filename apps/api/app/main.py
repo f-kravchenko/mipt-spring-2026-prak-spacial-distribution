@@ -15,6 +15,7 @@ from sqlalchemy import text
 from .db import TILES_BASE_URL, engine
 from .index_config import (
     CITY_SCORES, DEFAULT_WEIGHTS, DOMAIN, INDICATOR_NAME, MASK_ORDER,
+    VISIBLE_INDICATORS,
 )
 from .schemas import (
     Indicator, Mask, RecomputeRequest, RecomputeResult, Region,
@@ -112,6 +113,8 @@ def regions():
             id=r["id"], slug=r["slug"], name=r["name"],
             bbox=[r["minx"], r["miny"], r["maxx"], r["maxy"]],
             cell_count=r["index_cells"] if r["index_cells"] else r["all_cells"],
+            grid_cells=(r["all_cells"] or 0) - (r["index_cells"] or 0),
+            index_cells=r["index_cells"] or 0,
             cities_tile_url=_city_tile_url(r["id"]) if r["has_city"] else None,
             roads_tile_url=_road_tile_url(r["id"]) if r["has_road"] else None,
             index_tile_url=_index_tile_url(r["id"], r["index_ver"]) if r["index_cells"] else None,
@@ -126,12 +129,20 @@ def regions():
 
 @app.get("/api/indicators", response_model=list[Indicator])
 def indicators():
+    """Показатели для интерфейса. В БД лежат все загруженные, отдаём только
+    VISIBLE_INDICATORS (см. index_config) — данные и композиции скрытых
+    остаются, скрыт лишь выбор в выпадашке. Порядок — как в списке."""
     sql = text("""
         SELECT code, name, unit, elasticity, r2, indicator_type, national_total
-        FROM indicator ORDER BY code
+        FROM indicator
+        WHERE :all OR code = ANY(:codes)
+        ORDER BY code
     """)
     with engine.connect() as conn:
-        rows = conn.execute(sql).mappings().all()
+        rows = conn.execute(sql, {"all": not VISIBLE_INDICATORS,
+                                  "codes": VISIBLE_INDICATORS}).mappings().all()
+    order = {c: i for i, c in enumerate(VISIBLE_INDICATORS)}
+    rows = sorted(rows, key=lambda r: order.get(r["code"], len(order)))
     return [Indicator(**r) for r in rows]
 
 
@@ -271,7 +282,7 @@ _AGG_SQL = text("""
         WHERE gc.region_id = :r AND mcv.indicator_code IN ('', :i)
         GROUP BY mcv.cell_id
     ),
-    agg AS (SELECT count(*) n, sum(raw) s, max(raw) mx FROM cell),
+    agg AS (SELECT count(*) n, sum(raw) s, max(raw) mx, min(raw) mn FROM cell),
     ordr AS (SELECT raw, row_number() OVER (ORDER BY raw) rn FROM cell),
     gini AS (
         SELECT (2.0 * sum(o.rn * o.raw) / NULLIF(a.n * a.s, 0) - (a.n + 1.0) / a.n) AS g
@@ -292,8 +303,8 @@ _AGG_SQL = text("""
         END AS p95
         FROM cell WHERE raw > 0
     )
-    SELECT a.n AS n, a.s AS total, a.mx AS rawmax, g.g AS gini, top.t10 AS t10,
-           peak.p95 AS p95
+    SELECT a.n AS n, a.s AS total, a.mx AS rawmax, a.mn AS rawmin, g.g AS gini,
+           top.t10 AS t10, peak.p95 AS p95
     FROM agg a CROSS JOIN gini g CROSS JOIN top CROSS JOIN peak
 """)
 
@@ -315,27 +326,48 @@ def recompute(req: RecomputeRequest):
         row = conn.execute(
             _AGG_SQL, {"w": w_json, "r": req.region_id, "i": req.indicator}
         ).mappings().first()
+        itype = conn.execute(
+            text("SELECT indicator_type FROM indicator WHERE code = :c"), {"c": req.indicator}
+        ).scalar()
 
     if not row or not row["n"] or not row["total"] or row["total"] <= 0:
         raise HTTPException(422, "Пустой результат: нет масок с весами для этого региона")
 
     rv = float(rv)
-    total = float(row["total"])
-    value_max = float(row["rawmax"]) * rv / total
-    peak_threshold = float(row["p95"]) * rv / total if row["p95"] is not None else None
+    rawmax, rawmin = float(row["rawmax"]), float(row["rawmin"])
+    # Удельный показатель (ставка, «на 1000 чел.», «кв.м/чел.») не аддитивен:
+    # сумма по ячейкам ≠ региональный итог, доля от итога для него бессмысленна
+    # (рождаемость 8.5 по Москве давала 0.0005 «рождаемости» на ячейку). Вместо
+    # распределения — нормировка в 0..100 (normalization.normalize_indicator,
+    # min-max). Тайл считает (raw - off) * rv / total, поэтому off=rawmin,
+    # rv=100, total=размах: аффинное преобразование, см. миграцию 0011.
+    is_rate = itype == "rate"
+    if is_rate:
+        span = rawmax - rawmin
+        if span <= 0:  # все ячейки равны — нормировать нечего, как в normalize_indicator
+            off, rv_t, total = rawmin, 50.0, 1.0
+        else:
+            off, rv_t, total = rawmin, 100.0, span
+    else:
+        off, rv_t, total = 0.0, rv, float(row["total"])
+
+    scale = lambda v: (v - off) * rv_t / total
+    value_max = scale(rawmax)
+    peak_threshold = scale(float(row["p95"])) if row["p95"] is not None else None
     metrics = {
         "gini": float(row["gini"]) if row["gini"] is not None else 0.0,
-        "top10_share": float(row["t10"]) / total if total else 0.0,
-        "sum_error": 0.0,  # инвариант суммы выполнен по построению
+        "top10_share": float(row["t10"]) / float(row["total"]) if row["total"] else 0.0,
     }
+    if not is_rate:
+        metrics["sum_error"] = 0.0  # инвариант суммы выполнен по построению
     tile_url = (
         f"{TILES_BASE_URL}/tile_composition/{{z}}/{{x}}/{{y}}"
-        f"?region={req.region_id}&ind={req.indicator}&rv={rv}&total={total}"
-        f"&w={quote(w_json)}"
+        f"?region={req.region_id}&ind={req.indicator}&rv={rv_t}&total={total}"
+        f"&off={off}&w={quote(w_json)}"
     )
     return RecomputeResult(
         tile_url=tile_url, value_max=value_max, regional_value=rv, metrics=metrics,
-        peak_threshold=peak_threshold,
+        peak_threshold=peak_threshold, value_kind="score" if is_rate else "absolute",
     )
 
 
