@@ -322,8 +322,13 @@ def load_csv_mask(engine, region_id, mask_id, csv_path, code_to_id):
     return len(out)
 
 
-def load_compositions(engine, region_id, grid, code_to_id, regional_values, cfg):
-    """Прогон ablation-конфигураций -> composition + distribution_cell + quality_metric."""
+def load_compositions(engine, region_id, grid, code_to_id, regional_values, cfg,
+                      store_cells=False):
+    """Прогон ablation-конфигураций -> composition + quality_metric (+ по флагу
+    distribution_cell). Per-cell значения не читает никто: живая карта считает их
+    на лету (tile_composition), метрики ablation лежат в quality_metric, а
+    региональный итог — на самой композиции (см. миграцию 0012). Хранение стоило
+    7.35 ГБ из 10.2, поэтому по умолчанию не пишем."""
     cell_ids = grid['cell_code'].map(code_to_id).values
     params = {'city_sigma': cfg['distances']['city_sigma_km'],
               'center_sigma': cfg['distances']['center_sigma_km']}
@@ -340,20 +345,23 @@ def load_compositions(engine, region_id, grid, code_to_id, regional_values, cfg)
             with engine.begin() as conn:
                 comp_id = conn.execute(text("""
                     INSERT INTO composition (region_id, indicator_code, year, label, method,
-                                             weights, smoothing_alpha, sum_preserved)
-                    VALUES (:r, :ic, :y, :label, :method, :weights, :alpha, :sp)
+                                             weights, smoothing_alpha, sum_preserved,
+                                             regional_value)
+                    VALUES (:r, :ic, :y, :label, :method, :weights, :alpha, :sp, :rv)
                     RETURNING id
                 """), {
                     'r': region_id, 'ic': code, 'y': year, 'label': conf['label'],
                     'method': 'weighted_sum',
                     'weights': json.dumps(conf['weights']) if conf['weights'] else json.dumps({}),
                     'alpha': None, 'sp': bool(res['sum_preserved']),
+                    'rv': float(regional_value),
                 }).scalar()
 
-                pd.DataFrame({
-                    'composition_id': comp_id, 'cell_id': cell_ids, 'value': values,
-                }).to_sql('distribution_cell', conn, if_exists='append', index=False,
-                          chunksize=10000, method='multi')
+                if store_cells:
+                    pd.DataFrame({
+                        'composition_id': comp_id, 'cell_id': cell_ids, 'value': values,
+                    }).to_sql('distribution_cell', conn, if_exists='append', index=False,
+                              chunksize=10000, method='multi')
 
                 qm = {
                     'gini': metrics.gini(values),
@@ -504,6 +512,9 @@ def main():
     # обычно нужен ровно один — не трогая уже загруженные.
     ap.add_argument('--region', action='append', metavar='SLUG',
                     help='грузить только эти регионы (можно повторять)')
+    ap.add_argument('--store-cells', action='store_true',
+                    help='писать distribution_cell (артефакт §9.5 ТЗ; ~7 ГБ на '
+                         'четыре региона, живому сервису не нужен)')
     args = ap.parse_args()
 
     if not args.database_url:
@@ -541,7 +552,8 @@ def main():
             regional_values[code] = val
 
         load_mask_values(engine, grid, code_to_id, slug_to_id, list(regional_values), params)
-        load_compositions(engine, region_id, grid, code_to_id, regional_values, cfg)
+        load_compositions(engine, region_id, grid, code_to_id, regional_values, cfg,
+                          store_cells=args.store_cells)
         print(f"  ячеек: {len(grid)}, показателей: {len(regional_values)}")
 
         if reg.get('cities'):

@@ -255,14 +255,13 @@ def default_weights(indicator: str = Query(...)):
     return {_MASK_SLUG[k]: v for k, v in weights_internal.items() if k in _MASK_SLUG}
 
 
-# Региональное значение показателя = сумма распределения любой его композиции
-# (все они сохраняют сумму). regional_value-таблица в этой сборке не заполнена.
+# Региональное значение показателя лежит на композиции (миграция 0012). Раньше
+# восстанавливалось как sum(distribution_cell.value) — по строке на ячейку на
+# каждый ablation-пресет, 7.35 ГБ ради одного числа.
 _RV_SQL = text("""
-    SELECT sum(dc.value) FROM distribution_cell dc
-    WHERE dc.composition_id = (
-        SELECT id FROM composition
-        WHERE region_id = :r AND indicator_code = :i ORDER BY id LIMIT 1
-    )
+    SELECT regional_value FROM composition
+    WHERE region_id = :r AND indicator_code = :i AND regional_value IS NOT NULL
+    ORDER BY id LIMIT 1
 """)
 
 # Взвешенная сумма масок по ячейкам + агрегаты для нормировки и метрик.
@@ -384,13 +383,11 @@ _GLOBAL_SCALE_SQL = text("""
         WHERE (e.value)::double precision <> 0
     ),
     rv AS (
-        SELECT c.region_id, sum(dc.value) AS rv
-        FROM distribution_cell dc
-        JOIN composition c ON c.id = dc.composition_id
-        WHERE c.id IN (
-            SELECT min(id) FROM composition WHERE indicator_code = :i GROUP BY region_id
-        )
-        GROUP BY c.region_id
+        -- см. 0012: итог на композиции, а не сумма per-cell строк
+        SELECT DISTINCT ON (region_id) region_id, regional_value AS rv
+        FROM composition
+        WHERE indicator_code = :i AND regional_value IS NOT NULL
+        ORDER BY region_id, id
     ),
     cell AS (
         SELECT gc.region_id, mcv.cell_id, sum(wt.w * mcv.weight) AS raw
