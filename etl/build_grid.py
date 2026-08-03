@@ -40,7 +40,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROC = os.path.join(ROOT, "data/processed")
 
 
-def region_polygon(url, slug):
+def region_polygon(url, slug, border_path=None):
+    """Полигон региона: из БД, иначе из уже сохранённой границы. Фолбэк нужен на
+    проде — там сетку собирают ДО ingest_index, то есть регион в БД может ещё не
+    существовать, а border_<name>.gpkg лежит в репозитории."""
     import psycopg2
     from shapely.geometry import shape
     conn = psycopg2.connect(url)
@@ -48,9 +51,14 @@ def region_polygon(url, slug):
         cur.execute("SELECT ST_AsGeoJSON(geom) FROM region WHERE slug=%s", (slug,))
         row = cur.fetchone()
     conn.close()
-    if not row:
-        raise SystemExit(f"регион {slug} не найден в БД")
-    return shape(json.loads(row[0]))
+    if row:
+        return shape(json.loads(row[0]))
+    if border_path and os.path.exists(border_path):
+        import geopandas as gpd
+        b = gpd.read_file(border_path).to_crs(4326)
+        print(f"регион {slug} не в БД — берём границу из {border_path}")
+        return b.union_all() if hasattr(b, "union_all") else b.unary_union
+    raise SystemExit(f"регион {slug} не найден в БД, и нет {border_path}")
 
 
 def build_grid(border_gdf):
@@ -141,9 +149,9 @@ def main():
     import pandas as pd
     from shapely.geometry import Point
 
-    poly = region_polygon(url, slug)
-    border = gpd.GeoDataFrame({"name": [slug]}, geometry=[poly], crs=4326).to_crs(3857)
     border_path = os.path.join(PROC, f"border_{name}.gpkg")
+    poly = region_polygon(url, slug, border_path)
+    border = gpd.GeoDataFrame({"name": [slug]}, geometry=[poly], crs=4326).to_crs(3857)
     border.to_file(border_path, driver="GPKG")
     print(f"граница → {border_path} ({border.geometry.area.sum()/1e6:,.0f} усл. км²)")
 
