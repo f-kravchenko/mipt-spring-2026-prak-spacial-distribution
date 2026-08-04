@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from .db import TILES_BASE_URL, engine
+from .composite_config import COMPOSITE, COMPOSITE_DOMAIN, COMPOSITE_NAME
 from .index_config import (
     CITY_SCORES, DEFAULT_WEIGHTS, DOMAIN, INDICATOR_NAME, MASK_ORDER,
     VISIBLE_INDICATORS,
@@ -351,6 +352,101 @@ def recompute(req: RecomputeRequest):
         tile_url=tile_url, value_max=value_max, regional_value=rv, metrics=metrics,
         peak_threshold=peak_threshold,
     )
+
+
+# Диапазон слоя КАЖДОГО показателя по ячейкам региона при его собственных весах
+# масок — min/max для нормировки §4.1. Один запрос на все показатели свода:
+# spec приходит как json-массив {ind, slug, w}.
+_COMPOSITE_SPAN_SQL = text("""
+    WITH spec AS (
+        SELECT e->>'ind' AS ind, e->>'slug' AS slug, (e->>'w')::double precision AS w
+        FROM json_array_elements(CAST(:spec AS json)) e
+    ),
+    wt AS (SELECT spec.ind, m.id AS mask_id, spec.w FROM spec JOIN mask m ON m.slug = spec.slug),
+    cell AS (
+        SELECT wt.ind, mcv.cell_id, sum(wt.w * mcv.weight) AS raw
+        FROM mask_cell_value mcv
+        JOIN wt ON wt.mask_id = mcv.mask_id
+        JOIN grid_cell gc ON gc.id = mcv.cell_id
+        WHERE gc.region_id = :r AND mcv.indicator_code IN ('', wt.ind)
+        GROUP BY wt.ind, mcv.cell_id
+    )
+    SELECT ind, min(raw) AS mn, max(raw) AS mx, count(*) AS n FROM cell GROUP BY ind
+""")
+
+
+@app.get("/api/composite")
+def composite(region_id: int = Query(...)):
+    """Результирующий слой: слой каждого показателя нормируется в 0..100 по
+    §4.1 (min-max по ячейкам региона, с учётом направления) и складывается с
+    весами показателей. Веса масок — свои у каждого показателя (composite_config).
+
+    Свод линеен по маскам, поэтому отдаём эффективный вектор весов и сдвиг для
+    уже существующего tile_composition (см. вывод в composite_config)."""
+    spec, meta = [], {}
+    for code, c in COMPOSITE.items():
+        wi = float(c.get("indicator_weight") or 0)
+        if wi <= 0:
+            continue
+        masks = {k: float(v) for k, v in c["masks"].items() if v}
+        if not masks:
+            continue
+        # regression зависит от показателя — в один коэффициент не сворачивается
+        if "regression_mask" in masks:
+            raise HTTPException(422, f"{code}: вес на regression_mask не поддержан "
+                                     "линеаризацией свода (см. composite_config)")
+        meta[code] = {"w": wi, "direction": c.get("direction", "direct"), "masks": masks}
+        spec += [{"ind": code, "slug": k, "w": v} for k, v in masks.items()]
+    if not spec:
+        raise HTTPException(422, "В composite_config нет показателей с весом > 0")
+
+    with engine.connect() as conn:
+        rows = {r["ind"]: r for r in conn.execute(
+            _COMPOSITE_SPAN_SQL,
+            {"spec": json.dumps(spec, ensure_ascii=False), "r": region_id},
+        ).mappings().all()}
+        # какие маски вообще посчитаны в этом регионе: у НСО нет ЖД/ЛЭП/типа
+        # территории/времени в пути. Вес на них уходит в ноль — сообщаем об
+        # этом явно, иначе свод молча считается по неполному вектору.
+        have = {r[0] for r in conn.execute(text(
+            "SELECT DISTINCT m.slug FROM mask_cell_value mcv "
+            "JOIN mask m ON m.id = mcv.mask_id JOIN grid_cell g ON g.id = mcv.cell_id "
+            "WHERE g.region_id = :r"), {"r": region_id})}
+    if not rows:
+        raise HTTPException(404, "Нет масок с данными для этого региона")
+
+    # Веса показателей нормируем к 1, чтобы результат лежал в 0..100. Слой с
+    # нулевым размахом (все ячейки равны) нормировать нельзя — исключаем его и
+    # перераспределяем вес, а не подставляем 50 баллов молча.
+    used = {c: m for c, m in meta.items() if c in rows and rows[c]["mx"] > rows[c]["mn"]}
+    if not used:
+        raise HTTPException(422, "У всех слоёв нулевой размах — нормировать нечего")
+    wsum = sum(m["w"] for m in used.values())
+
+    eff: dict[str, float] = {}
+    off = 0.0
+    layers = []
+    for code, m in used.items():
+        mn, mx = float(rows[code]["mn"]), float(rows[code]["mx"])
+        direct = m["direction"] != "inverse"
+        k = 100.0 * (m["w"] / wsum) * (1.0 if direct else -1.0) / (mx - mn)
+        off += k * (mn if direct else mx)
+        for slug, w in m["masks"].items():
+            eff[slug] = eff.get(slug, 0.0) + k * w
+        layers.append({"indicator": code, "weight": round(m["w"] / wsum, 4),
+                       "direction": m["direction"], "raw_min": mn, "raw_max": mx,
+                       "cells": int(rows[code]["n"])})
+    skipped = [c for c in meta if c not in used]
+    missing_masks = sorted({m for cfg in used.values() for m in cfg["masks"]} - have)
+
+    w_json = json.dumps({k: v for k, v in eff.items() if v}, ensure_ascii=False)
+    tile_url = (
+        f"{TILES_BASE_URL}/tile_composition/{{z}}/{{x}}/{{y}}"
+        f"?region={region_id}&ind=&rv=1&total=1&off={off}&w={quote(w_json)}"
+    )
+    return {"name": COMPOSITE_NAME, "domain": COMPOSITE_DOMAIN, "tile_url": tile_url,
+            "effective_weights": eff, "offset": off, "layers": layers,
+            "skipped": skipped, "missing_masks": missing_masks}
 
 
 # Глобальная шкала для режима отображения "Россия": p99 абсолютных значений

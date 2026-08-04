@@ -71,3 +71,10 @@ export async function recompute(regionId, indicator, weights) {
   if (!res.ok) throw new Error(`recompute: ${res.status}`);
   return res.json();
 }
+
+// Результирующий слой (комплексная оценка): слой каждого показателя нормируется
+// в 0..100 по §4.1 методики и складывается с весами показателей. Веса масок —
+// свои у каждого показателя, задаются экспертно на бэке (composite_config).
+// Возвращает готовый tile_url (свод линеен по маскам, поэтому рисуется тем же
+// tile_composition) + разбор по слоям для панели.
+export const fetchComposite = (regionId) => get(`/api/composite?region_id=${regionId}`);

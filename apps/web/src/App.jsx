@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
-import { fetchRegions, fetchIndicators, fetchMasks, fetchIndexConfig, fetchDefaultWeights, fetchMaskPeaks, fetchConcentrationStructure, fetchGlobalScale, recompute } from "./api";
+import { fetchRegions, fetchIndicators, fetchMasks, fetchIndexConfig, fetchComposite, fetchDefaultWeights, fetchMaskPeaks, fetchConcentrationStructure, fetchGlobalScale, recompute } from "./api";
 
 // Специальный id пресета "Автоподбор": веса запрашиваются у бэкенда через
 // GET /api/default-weights?indicator=... (src/masks/weighting.resolve_weights,
@@ -86,6 +86,9 @@ const RF_BOUNDS = [[18, 40], [180, 82]]; // вид всей РФ (для мин�
 // (он не сумма-сохраняемый, значение уже в ячейке), поэтому в общем списке
 // показателей он представлен этим сентинелом.
 const IDX_CODE = "idx";
+// Результирующий слой: у него нет кода в таблице indicator — он свод по
+// нескольким показателям с экспертными весами (см. /api/composite).
+const COMPOSITE_CODE = "composite";
 const INDEX_STOPS = DIST_STOPS;
 // Позиции цветовых стопов (value, цвет) по домену — делятся между заливкой и
 // легендой. Линейная — равномерно; логарифмическая — геометрически (лог даёт
@@ -234,6 +237,7 @@ export default function App() {
   const [presetId, setPresetId] = useState(AUTO_PRESET_ID);
   const [weights, setWeights] = useState({ ...FALLBACK_AUTO_WEIGHTS }); // slug -> вес
   const [liveComp, setLiveComp] = useState(null);              // {tile_url, value_max, metrics}
+  const [composite, setComposite] = useState(null);            // разбор свода по слоям
   const [structure, setStructure] = useState(null);             // GeoJSON: пики + линии концентрации (ТЗ п.5)
   // Триггер сравнения «базовая (по площади)»: базовое распределение (показатель
   // разложен равномерно по площади) не зависит от весов масок — считаем один раз
@@ -413,10 +417,14 @@ export default function App() {
   // становились недостижимы, как только индекс залили во все регионы.
   const idxReg2 = regions.find((r) => r.id === regionId);
   const isIndex = indicator === IDX_CODE;
+  const isComposite = indicator === COMPOSITE_CODE;
   const selRegionCells = (isIndex ? idxReg2?.index_cells : idxReg2?.grid_cells) ?? 0;
-  const territoryBase = liveComp?.regional_value > 0 && selRegionCells > 0
+  // У свода значение — уже балл 0..100 (§4.1), «база = итог/ячейки» для него не
+  // определена: регионального итога у свода нет. База null включает линейный
+  // фолбэк 0..vmax, то есть ровно шкалу 0..100.
+  const territoryBase = !isComposite && liveComp?.regional_value > 0 && selRegionCells > 0
     ? liveComp.regional_value / selRegionCells : null;
-  const distBase = scaleMode === "russia" && globalScale?.base_cell > 0
+  const distBase = !isComposite && scaleMode === "russia" && globalScale?.base_cell > 0
     ? globalScale.base_cell : territoryBase;
   const distVmax = liveComp?.value_max > 0 ? liveComp.value_max : 1;
   // для тултипа: читается из хендлера hover через ref, чтобы смена режима
@@ -519,7 +527,8 @@ export default function App() {
           setRegionId(rg.some((r) => r.id === initState.regionId) ? initState.regionId : rg[0].id);
         // IDX_CODE — валидный выбор наравне с кодами Росстата (эффект ниже
         // всё равно поправит, если у региона нужного набора ячеек нет)
-        if (initState.indicator === IDX_CODE || ind.some((i) => i.code === initState.indicator))
+        if ([IDX_CODE, COMPOSITE_CODE].includes(initState.indicator)
+            || ind.some((i) => i.code === initState.indicator))
           setIndicator(initState.indicator);
         else
           setIndicator(IDX_CODE);
@@ -536,8 +545,8 @@ export default function App() {
     if (!reg || (!indicators.length && !reg.index_tile_url)) return;
     const hasIdx = reg.index_tile_url != null;
     const hasGrid = reg.grid_cells > 0 && indicators.length > 0;
-    const ok = indicator === IDX_CODE
-      ? hasIdx
+    const ok = indicator === IDX_CODE ? hasIdx
+      : indicator === COMPOSITE_CODE ? hasGrid
       : hasGrid && indicators.some((i) => i.code === indicator);
     if (!ok) setIndicator(hasIdx ? IDX_CODE : hasGrid ? indicators[0].code : null);
   }, [regionId, regions, indicators, indicator]);
@@ -690,6 +699,16 @@ export default function App() {
       setLiveComp(null); setStructure(null); return;
     }
     if (regionId == null || !indicator) return;
+    if (indicator === COMPOSITE_CODE) {
+      // свод не зависит от ползунков: веса масок заданы экспертно на бэке.
+      // value_max = 100 — верх шкалы §4.1, инварианта суммы у свода нет.
+      setStructure(null);
+      fetchComposite(regionId)
+        .then((c) => { setComposite(c); setLiveComp({ tile_url: c.tile_url, value_max: 100, metrics: {} }); })
+        .catch(() => { setComposite(null); setLiveComp(null); });
+      return;
+    }
+    setComposite(null);
     const saved = savedByIndicatorRef.current[indicator];
     if (saved) {
       setPresetId(saved.presetId);
@@ -1148,11 +1167,15 @@ export default function App() {
   // число ячеек — значение ячейки при равномерном размазывании). Жёлтая
   // середина = ×1 базы; тёплые ступени лог-кратные (×4, ≥×16).
   const rfReady = scaleMode === "russia" && globalScale?.base_cell > 0;
-  const legendTitle = rfReady
+  const legendTitle = isComposite
+    ? "Комплексная оценка, балл 0…100 (§4.1: нормировка слоёв + веса показателей)"
+    : rfReady
     ? `Концентрация к базе РФ (${fmt(globalScale.base_cell)}/ячейку)`
     : scaleMode === "russia" ? "Распределение — считаем базу РФ…"
     : `Концентрация к базе территории${distBase > 0 ? ` (${fmt(distBase)}/ячейку)` : ""}`;
-  const legendMults = ["0", "×0.5", "×1", "×4", "≥×16"];
+  const legendMults = isComposite
+    ? ["0", "25", "50", "75", "100"]
+    : ["0", "×0.5", "×1", "×4", "≥×16"];
 
   return (
     <div className="app">
@@ -1213,6 +1236,9 @@ export default function App() {
               <select value={indicator ?? ""} onChange={(e) => setIndicator(e.target.value)}>
                 {selRegion?.index_tile_url && (
                   <option value={IDX_CODE}>{indexName}</option>
+                )}
+                {selRegion?.grid_cells > 0 && (
+                  <option value={COMPOSITE_CODE}>Комплексная оценка (результирующий слой)</option>
                 )}
                 {selRegion?.grid_cells > 0 && indicators.map((i) => (
                   <option key={i.code} value={i.code}>{`${i.code} · ${i.name}`}</option>
@@ -1340,7 +1366,41 @@ export default function App() {
               </details>
             )}
 
-            {!isIndex && <>
+            {isComposite && composite && (
+              <div className="section">
+                <div className="sub" style={{ margin: 0 }}>
+                  Слой каждого показателя нормирован в 0…100 по его собственным
+                  весам масок (задаются экспертно на бэке), затем слои сложены с
+                  весами показателей. Ползунков нет намеренно: веса свода —
+                  часть методики, а не настройка вида.
+                </div>
+                <table className="metrics" style={{ marginTop: 8, fontSize: 11 }}>
+                  <tbody>
+                    {composite.layers.map((l) => (
+                      <tr key={l.indicator}>
+                        <td title={l.direction === "inverse" ? "обратное действие: больше — хуже" : "прямое действие"}>
+                          {l.indicator}{l.direction === "inverse" ? " ↓" : ""}
+                        </td>
+                        <td>{(l.weight * 100).toFixed(0)}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {composite.missing_masks?.length > 0 && (
+                  <div className="sub" style={{ marginTop: 6 }}>
+                    Нет данных в регионе, вес этих масок ушёл в ноль:{" "}
+                    {composite.missing_masks.join(", ")}
+                  </div>
+                )}
+                {composite.skipped?.length > 0 && (
+                  <div className="sub" style={{ marginTop: 6 }}>
+                    Без данных в этом регионе, вес перераспределён:{" "}
+                    {composite.skipped.join(", ")}
+                  </div>
+                )}
+              </div>
+            )}
+            {!isIndex && !isComposite && <>
             <div className="section">
               <div className="weights">
                 <div className="weights-head">
@@ -1513,7 +1573,9 @@ export default function App() {
               Пиков концентрации: <b>{structure.features.filter((f) => f.properties.kind === "peak").length}</b>
             </div>
           )}
-          {active.metrics && <Metrics comp={active} />}
+          {/* у свода нет ни инварианта суммы, ни регионального итога —
+              метрики распределения к нему не применимы */}
+          {!isComposite && active.metrics && <Metrics comp={active} />}
         </div>
       )}
     </div>
