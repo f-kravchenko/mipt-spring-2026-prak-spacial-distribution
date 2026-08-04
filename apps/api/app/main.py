@@ -281,7 +281,7 @@ _AGG_SQL = text("""
         WHERE gc.region_id = :r AND mcv.indicator_code IN ('', :i)
         GROUP BY mcv.cell_id
     ),
-    agg AS (SELECT count(*) n, sum(raw) s, max(raw) mx, min(raw) mn FROM cell),
+    agg AS (SELECT count(*) n, sum(raw) s, max(raw) mx FROM cell),
     ordr AS (SELECT raw, row_number() OVER (ORDER BY raw) rn FROM cell),
     gini AS (
         SELECT (2.0 * sum(o.rn * o.raw) / NULLIF(a.n * a.s, 0) - (a.n + 1.0) / a.n) AS g
@@ -302,7 +302,7 @@ _AGG_SQL = text("""
         END AS p95
         FROM cell WHERE raw > 0
     )
-    SELECT a.n AS n, a.s AS total, a.mx AS rawmax, a.mn AS rawmin, g.g AS gini,
+    SELECT a.n AS n, a.s AS total, a.mx AS rawmax, g.g AS gini,
            top.t10 AS t10, peak.p95 AS p95
     FROM agg a CROSS JOIN gini g CROSS JOIN top CROSS JOIN peak
 """)
@@ -325,48 +325,31 @@ def recompute(req: RecomputeRequest):
         row = conn.execute(
             _AGG_SQL, {"w": w_json, "r": req.region_id, "i": req.indicator}
         ).mappings().first()
-        itype = conn.execute(
-            text("SELECT indicator_type FROM indicator WHERE code = :c"), {"c": req.indicator}
-        ).scalar()
 
     if not row or not row["n"] or not row["total"] or row["total"] <= 0:
         raise HTTPException(422, "Пустой результат: нет масок с весами для этого региона")
 
     rv = float(rv)
-    rawmax, rawmin = float(row["rawmax"]), float(row["rawmin"])
-    # Удельный показатель (ставка, «на 1000 чел.», «кв.м/чел.») не аддитивен:
-    # сумма по ячейкам ≠ региональный итог, доля от итога для него бессмысленна
-    # (рождаемость 8.5 по Москве давала 0.0005 «рождаемости» на ячейку). Вместо
-    # распределения — нормировка в 0..100 (normalization.normalize_indicator,
-    # min-max). Тайл считает (raw - off) * rv / total, поэтому off=rawmin,
-    # rv=100, total=размах: аффинное преобразование, см. миграцию 0011.
-    is_rate = itype == "rate"
-    if is_rate:
-        span = rawmax - rawmin
-        if span <= 0:  # все ячейки равны — нормировать нечего, как в normalize_indicator
-            off, rv_t, total = rawmin, 50.0, 1.0
-        else:
-            off, rv_t, total = rawmin, 100.0, span
-    else:
-        off, rv_t, total = 0.0, rv, float(row["total"])
-
-    scale = lambda v: (v - off) * rv_t / total
-    value_max = scale(rawmax)
-    peak_threshold = scale(float(row["p95"])) if row["p95"] is not None else None
+    total = float(row["total"])
+    # Показатель отдаётся В АБСОЛЮТНЫХ ВЕЛИЧИНАХ: доля ячейки в региональном
+    # итоге, Σ по ячейкам = итог. Нормировка в 0..100 понадобится будущему
+    # результирующему слою (для неё в tile_composition уже есть off, см. 0011),
+    # но отдельные показатели через неё не проводим.
+    value_max = float(row["rawmax"]) * rv / total
+    peak_threshold = float(row["p95"]) * rv / total if row["p95"] is not None else None
     metrics = {
         "gini": float(row["gini"]) if row["gini"] is not None else 0.0,
-        "top10_share": float(row["t10"]) / float(row["total"]) if row["total"] else 0.0,
+        "top10_share": float(row["t10"]) / total if total else 0.0,
+        "sum_error": 0.0,  # инвариант суммы выполнен по построению
     }
-    if not is_rate:
-        metrics["sum_error"] = 0.0  # инвариант суммы выполнен по построению
     tile_url = (
         f"{TILES_BASE_URL}/tile_composition/{{z}}/{{x}}/{{y}}"
-        f"?region={req.region_id}&ind={req.indicator}&rv={rv_t}&total={total}"
-        f"&off={off}&w={quote(w_json)}"
+        f"?region={req.region_id}&ind={req.indicator}&rv={rv}&total={total}"
+        f"&w={quote(w_json)}"
     )
     return RecomputeResult(
         tile_url=tile_url, value_max=value_max, regional_value=rv, metrics=metrics,
-        peak_threshold=peak_threshold, value_kind="score" if is_rate else "absolute",
+        peak_threshold=peak_threshold,
     )
 
 

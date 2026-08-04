@@ -414,16 +414,9 @@ export default function App() {
   const idxReg2 = regions.find((r) => r.id === regionId);
   const isIndex = indicator === IDX_CODE;
   const selRegionCells = (isIndex ? idxReg2?.index_cells : idxReg2?.grid_cells) ?? 0;
-  // LQ-шкала осмысленна только для объёмных показателей: база = итог/ячейки.
-  // У удельных (value_kind: score) значение — балл 0..100, а «база» вышла бы
-  // 8.5/141967 ≈ 0.00006, и каждая ячейка оказалась бы >16× базы — карта
-  // целиком в верхнем цвете. База null включает линейный фолбэк 0..vmax ниже
-  // (он же снимает строку «Концентрация ×» в тултипе); 0..100 и так сравнимы
-  // между регионами, поэтому режим «Россия» для них ничего не меняет.
-  const isScoreKind = liveComp?.value_kind === "score";
-  const territoryBase = !isScoreKind && liveComp?.regional_value > 0 && selRegionCells > 0
+  const territoryBase = liveComp?.regional_value > 0 && selRegionCells > 0
     ? liveComp.regional_value / selRegionCells : null;
-  const distBase = !isScoreKind && scaleMode === "russia" && globalScale?.base_cell > 0
+  const distBase = scaleMode === "russia" && globalScale?.base_cell > 0
     ? globalScale.base_cell : territoryBase;
   const distVmax = liveComp?.value_max > 0 ? liveComp.value_max : 1;
   // для тултипа: читается из хендлера hover через ref, чтобы смена режима
@@ -434,8 +427,7 @@ export default function App() {
   const distFillColor = (base) => ["interpolate", ["linear"], ["get", "value"],
     ...(base > 0
       ? LQ_MULTS.flatMap((m, i) => [base * m, DIST_STOPS[i]])
-      // линейная 0..vmax — пока база не готова, а для удельных показателей
-      // (base всегда null) это основной режим: деления 0/25/50/75/100 балла
+      // фолбэк, пока база не готова: линейная шкала 0..vmax
       : DIST_STOPS.flatMap((c, i) => [distVmax * i / (DIST_STOPS.length - 1), c]))];
 
   // Переключение Территория/Россия меняет ТОЛЬКО paint-свойство готового слоя
@@ -812,20 +804,13 @@ export default function App() {
     const onMove = (e) => {
       const v = Number(e.features[0].properties.value);
       map.getCanvas().style.cursor = "pointer";
-      // Удельный показатель (value_kind: score) — балл 0..100, а не величина в
-      // единицах показателя: доли от регионального/национального итога для него
-      // не имеют смысла (ставку по ячейкам не складывают), поэтому не показываем.
-      const isScore = dist.value_kind === "score";
       const unit = indMeta?.unit ? ` ${indMeta.unit}` : "";
-      const rows = isScore
-        ? [`Балл: <b>${fmt(v)}</b> из 100`,
-           `Показатель по региону: ${fmt(dist.regional_value)}${unit}`]
-        : [`Абсолютно: <b>${fmt(v)}</b>${unit}`];
+      const rows = [`Абсолютно: <b>${fmt(v)}</b>${unit}`];
       if (distBaseRef.current > 0)
         rows.push(`Концентрация: ×${fmt(v / distBaseRef.current)} базовой`);
-      if (!isScore && dist.regional_value > 0)
+      if (dist.regional_value > 0)
         rows.push(`Доля территории: ${fmt((v / dist.regional_value) * 100)}%`);
-      if (!isScore && indMeta?.national_total > 0)
+      if (indMeta?.national_total > 0)
         rows.push(`Доля России: ${fmt((v / indMeta.national_total) * 100)}%`);
       hoverPopup.setLngLat(e.lngLat).setHTML(rows.join("<br>")).addTo(map);
     };
@@ -1163,18 +1148,11 @@ export default function App() {
   // число ячеек — значение ячейки при равномерном размазывании). Жёлтая
   // середина = ×1 базы; тёплые ступени лог-кратные (×4, ≥×16).
   const rfReady = scaleMode === "russia" && globalScale?.base_cell > 0;
-  // У удельного показателя шкала линейная 0..100 (база LQ для него не считается),
-  // поэтому и подпись, и деления другие — иначе легенда обещает кратные базы,
-  // которых на карте нет.
-  const legendTitle = isScoreKind
-    ? "Балл 0…100 (нормировка удельного показателя)"
-    : rfReady
+  const legendTitle = rfReady
     ? `Концентрация к базе РФ (${fmt(globalScale.base_cell)}/ячейку)`
     : scaleMode === "russia" ? "Распределение — считаем базу РФ…"
     : `Концентрация к базе территории${distBase > 0 ? ` (${fmt(distBase)}/ячейку)` : ""}`;
-  const legendMults = isScoreKind
-    ? ["0", "25", "50", "75", "100"]
-    : ["0", "×0.5", "×1", "×4", "≥×16"];
+  const legendMults = ["0", "×0.5", "×1", "×4", "≥×16"];
 
   return (
     <div className="app">
@@ -1548,13 +1526,8 @@ function Metrics({ comp }) {
     <div className="metrics" style={{ marginTop: 10 }}>
       <table>
         <tbody>
-          {/* инвариант суммы существует только для объёмных показателей: у
-              удельных (value_kind: score) API не присылает sum_error, и
-              заявлять «сумма сохранена» было бы неправдой */}
-          {m.sum_error != null && <>
-            <tr><td>Сумма сохранена</td><td className={comp.sum_preserved ? "ok" : "bad"}>{comp.sum_preserved ? "да" : "нет"}</td></tr>
-            <tr><td>Ошибка суммы</td><td>{fmt(m.sum_error)}</td></tr>
-          </>}
+          <tr><td>Сумма сохранена</td><td className={comp.sum_preserved ? "ok" : "bad"}>{comp.sum_preserved ? "да" : "нет"}</td></tr>
+          <tr><td>Ошибка суммы</td><td>{fmt(m.sum_error)}</td></tr>
           <tr><td>Джини</td><td>{fmt(m.gini)}</td></tr>
           <tr><td>Top-10% доля</td><td>{m.top10_share != null ? (m.top10_share * 100).toFixed(1) + "%" : "—"}</td></tr>
         </tbody>

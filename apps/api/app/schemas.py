@@ -62,10 +62,6 @@ class RecomputeResult(BaseModel):
     value_max: float | None = None
     regional_value: float | None = None
     metrics: dict[str, float]
-    # Что означает value ячейки: "absolute" — величина в единицах показателя
-    # (доля регионального итога, Σ по ячейкам = итог), "score" — балл 0..100
-    # (нормировка удельного показателя, суммировать нельзя).
-    value_kind: str = "absolute"
     # Порог "пика" на суммарном слое (top 5% ненулевых ячеек, percentile_cont
     # в _AGG_SQL). Уже в единицах распределения (масштабирован тем же rv/total, что и
     # value_max) — фронт сравнивает ["get","value"] >= peak_threshold в
