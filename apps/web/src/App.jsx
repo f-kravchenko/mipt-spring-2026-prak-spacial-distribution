@@ -85,7 +85,12 @@ const RF_BOUNDS = [[18, 40], [180, 82]]; // вид всей РФ (для мин�
 // Псевдокод показателя-индекса в выпадашке. ИКГС не лежит в таблице indicator
 // (он не сумма-сохраняемый, значение уже в ячейке), поэтому в общем списке
 // показателей он представлен этим сентинелом.
-const IDX_CODE = "idx";
+// Код ИКГС (см. index_config.INDICATOR_CODE на бэке). Префикс W, а не Y как у
+// Росстата: индекс считает Минстрой, в росстатовском массиве его нет. Раньше
+// здесь стоял сентинел "idx" — он остался как legacy-алиас, чтобы сохранённые
+// ссылки и localStorage не сбрасывались на другой показатель.
+const IDX_CODE = "W477100000";
+const IDX_CODE_LEGACY = "idx";
 // Результирующий слой: у него нет кода в таблице indicator — он свод по
 // нескольким показателям с экспертными весами (см. /api/composite).
 const COMPOSITE_CODE = "composite";
@@ -527,9 +532,9 @@ export default function App() {
           setRegionId(rg.some((r) => r.id === initState.regionId) ? initState.regionId : rg[0].id);
         // IDX_CODE — валидный выбор наравне с кодами Росстата (эффект ниже
         // всё равно поправит, если у региона нужного набора ячеек нет)
-        if ([IDX_CODE, COMPOSITE_CODE].includes(initState.indicator)
-            || ind.some((i) => i.code === initState.indicator))
-          setIndicator(initState.indicator);
+        const want = initState.indicator === IDX_CODE_LEGACY ? IDX_CODE : initState.indicator;
+        if ([IDX_CODE, COMPOSITE_CODE].includes(want) || ind.some((i) => i.code === want))
+          setIndicator(want);
         else
           setIndicator(IDX_CODE);
       }

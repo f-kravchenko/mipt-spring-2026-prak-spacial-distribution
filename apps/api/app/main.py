@@ -15,8 +15,8 @@ from sqlalchemy import text
 from .db import TILES_BASE_URL, engine
 from .composite_config import COMPOSITE, COMPOSITE_DOMAIN, COMPOSITE_NAME
 from .index_config import (
-    CITY_SCORES, DEFAULT_WEIGHTS, DOMAIN, INDICATOR_NAME, MASK_ORDER,
-    VISIBLE_INDICATORS,
+    CITY_SCORES, DEFAULT_WEIGHTS, DOMAIN, INDICATOR_CODE, INDICATOR_NAME,
+    INDICATOR_UNIT, MASK_ORDER, VISIBLE_INDICATORS,
 )
 from .schemas import (
     Indicator, Mask, RecomputeRequest, RecomputeResult, Region,
@@ -163,7 +163,8 @@ def get_index_config():
         masks.append({"key": slug, "title": r["title"], "source": r["source"],
                       "signal": r["signal"], "formula": r["formula"],
                       "influence": r["influence"], "default_weight": DEFAULT_WEIGHTS.get(slug, 0.0)})
-    return {"indicator_name": INDICATOR_NAME, "domain": DOMAIN,
+    return {"indicator_code": INDICATOR_CODE, "indicator_name": INDICATOR_NAME,
+            "indicator_unit": INDICATOR_UNIT, "domain": DOMAIN,
             "city_scores": CITY_SCORES, "masks": masks}
 
 

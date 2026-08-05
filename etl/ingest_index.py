@@ -41,6 +41,12 @@ CLOSE_CELLS = 1
 # показатель для regression-маски при переиспользии Росстат-масок (regression
 # indicator-dependent; берём «эталон» — Отгруженные товары обрабатывающей пром.)
 REG_INDICATOR = "Y477090007"
+# Сам ИКГС в таблице indicator: у него собственный код (префикс W — считает
+# Минстрой, в росстатовском массиве его нет). Нужен, чтобы на показатель можно
+# было ссылаться кодом (?indicator=...), а не сентинелом "idx".
+IKGS_CODE = "W477100000"
+IKGS_NAME = "Индекс качества городской среды"
+IKGS_UNIT = "балл"
 
 # Регионы, которые можно СОЗДАТЬ из russia.geojson, если их ещё нет в БД
 # (у якутского «центра» полигон только в БД — его сюда не включаем).
@@ -141,6 +147,13 @@ def main():
     if os.path.exists(MIGRATION):
         cur.execute(open(MIGRATION, encoding="utf-8").read())
     reg, name, border = get_region(cur, slug)
+    cur.execute("""
+        INSERT INTO indicator (code, name, unit, indicator_type)
+        VALUES (%s, %s, %s, 'index')
+        ON CONFLICT (code) DO UPDATE SET
+            name = EXCLUDED.name, unit = EXCLUDED.unit,
+            indicator_type = EXCLUDED.indicator_type
+    """, (IKGS_CODE, IKGS_NAME, IKGS_UNIT))
 
     # светлая подложка + контуры НП для фронта (слои nsk-region / nsk-cities)
     json.dump({"type": "FeatureCollection", "features": [
