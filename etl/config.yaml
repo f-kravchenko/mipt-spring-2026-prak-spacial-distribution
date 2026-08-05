@@ -41,9 +41,8 @@ regions:
   # slug совпадает с ИКГС-регионом НАМЕРЕННО: это один и тот же регион с двумя
   # наборами ячеек (как у МО/Краснодара/Якутии). Фронт берёт по slug статику
   # novosibirsk_ikgs_*.geojson, менять его нельзя. Сетку/границу/города собрал
-  # etl.build_grid (в 02_grid.ipynb НСО не готовили); csv-маски
-  # traveltime/railway/power/territory для неё не считались — ingest их тихо
-  # пропустит, дорожная сеть считается в PostGIS по таблице road.
+  # etl.build_grid (в 02_grid.ipynb НСО не готовили), дорожная сеть считается в
+  # PostGIS по таблице road (graphml для НСО нет, берём road_lines из infra.json).
   - slug: novosibirsk_ikgs
     name: "Новосибирская область"
     object_name: "Новосибирская область"
@@ -51,6 +50,12 @@ regions:
     border: "data/processed/border_novosibirsk.gpkg"
     cities: "data/processed/cities_novosibirsk.csv"
     roads_infra: "data/processed/novosibirsk_ikgs_infra.json"
+    # csv-маски посчитаны scripts/compute_masks_overpass.py (без osmnx, прямые
+    # запросы в Overpass + scipy) — те же σ и формулы, что у остальных регионов
+    railway: "data/processed/railway_novosibirsk.csv"
+    power: "data/processed/power_novosibirsk.csv"
+    territory: "data/processed/territory_novosibirsk.csv"
+    traveltime: "data/processed/traveltime_novosibirsk.csv"
 
 indicators:
   Y477090007:
