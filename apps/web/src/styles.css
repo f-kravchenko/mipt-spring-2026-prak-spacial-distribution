@@ -407,3 +407,24 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--muted); b
 .legend { position: absolute; bottom: 52px; right: 20px; max-width: 260px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 8px; padding: 10px 12px; font-size: 11px; box-shadow: 0 2px 8px rgba(0,0,0,.1); z-index: 4; }
 .legend .bar { height: 10px; width: 100%; border-radius: 3px; margin: 4px 0; }
 .legend .ends { display: flex; justify-content: space-between; color: var(--muted); }
+
+/* ---------- Подсказка по строке (своя, не нативный title) ---------- */
+/* fixed + вне .panel: overflow-y панели её не обрезает, в отличие от
+   absolute-блока внутри .panel-body. pointer-events: none — курсор
+   проходит сквозь, иначе подсказка мигала бы под собственным наведением. */
+.tip {
+  position: fixed;
+  z-index: 50;
+  max-width: 320px;
+  padding: 8px 10px;
+  background: #182338;
+  color: #f4f7fb;
+  border-radius: 8px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-line;          /* \n в тексте — переносы строк */
+  box-shadow: 0 6px 20px rgba(24, 35, 56, .28);
+  pointer-events: none;
+}
+.tip-row { cursor: help; }
+.tip-row:hover td { background: rgba(24, 35, 56, .05); }

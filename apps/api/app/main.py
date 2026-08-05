@@ -132,7 +132,8 @@ def regions():
 def indicators():
     """Показатели для интерфейса. В БД лежат все загруженные, отдаём только
     VISIBLE_INDICATORS (см. index_config) — данные и композиции скрытых
-    остаются, скрыт лишь выбор в выпадашке. Порядок — как в списке."""
+    остаются, скрыт лишь выбор в выпадашке. Порядок — ПО КОДУ: список в
+    index_config задаёт состав, а не сортировку."""
     sql = text("""
         SELECT code, name, unit, elasticity, r2, indicator_type, national_total
         FROM indicator
@@ -142,9 +143,7 @@ def indicators():
     with engine.connect() as conn:
         rows = conn.execute(sql, {"all": not VISIBLE_INDICATORS,
                                   "codes": VISIBLE_INDICATORS}).mappings().all()
-    order = {c: i for i, c in enumerate(VISIBLE_INDICATORS)}
-    rows = sorted(rows, key=lambda r: order.get(r["code"], len(order)))
-    return [Indicator(**r) for r in rows]
+    return [Indicator(**r) for r in rows]  # ORDER BY code в запросе
 
 
 @app.get("/api/index-config")
@@ -437,6 +436,7 @@ def composite(region_id: int = Query(...)):
         layers.append({"indicator": code, "weight": round(m["w"] / wsum, 4),
                        "direction": m["direction"], "raw_min": mn, "raw_max": mx,
                        "cells": int(rows[code]["n"])})
+    layers.sort(key=lambda l: l["indicator"])  # по коду, как /api/indicators
     skipped = [c for c in meta if c not in used]
     missing_masks = sorted({m for cfg in used.values() for m in cfg["masks"]} - have)
 

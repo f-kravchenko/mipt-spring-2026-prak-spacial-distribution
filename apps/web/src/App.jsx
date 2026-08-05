@@ -243,6 +243,12 @@ export default function App() {
   const [weights, setWeights] = useState({ ...FALLBACK_AUTO_WEIGHTS }); // slug -> вес
   const [liveComp, setLiveComp] = useState(null);              // {tile_url, value_max, metrics}
   const [composite, setComposite] = useState(null);            // разбор свода по слоям
+  // Подсказка рисуется САМА, а не нативным title: тот появляется с секундной
+  // задержкой и легко теряется. Позиционируется fixed и живёт вне .panel,
+  // поэтому её не режет overflow-y панели.
+  const [tip, setTip] = useState(null);                        // {text, x, y}
+  const showTip = (text) => (e) => setTip({ text, x: e.clientX, y: e.clientY });
+  const hideTip = () => setTip(null);
   const [structure, setStructure] = useState(null);             // GeoJSON: пики + линии концентрации (ТЗ п.5)
   // Триггер сравнения «базовая (по площади)»: базовое распределение (показатель
   // разложен равномерно по площади) не зависит от весов масок — считаем один раз
@@ -258,6 +264,7 @@ export default function App() {
   const indexMasks = indexConfig?.masks ?? [];
   const cityScore = indexConfig?.city_scores ?? {};
   const indexName = indexConfig?.indicator_name ?? "Индекс качества городской среды";
+  const indexCode = indexConfig?.indicator_code ?? IDX_CODE;
   // indexDomain/indexStops зависят от scaleMode — считаются ниже, после его объявления.
 
   // Веса масок присутствия индекс-региона (ключи = m.key). Отдельно от weights
@@ -1239,11 +1246,11 @@ export default function App() {
               {/* ИКГС и росстатовские показатели в ОДНОМ списке: у региона могут
                   быть оба набора ячеек, выбор показателя и переключает режим */}
               <select value={indicator ?? ""} onChange={(e) => setIndicator(e.target.value)}>
-                {selRegion?.index_tile_url && (
-                  <option value={IDX_CODE}>{indexName}</option>
-                )}
                 {selRegion?.grid_cells > 0 && (
                   <option value={COMPOSITE_CODE}>Комплексная оценка (результирующий слой)</option>
+                )}
+                {selRegion?.index_tile_url && (
+                  <option value={IDX_CODE}>{`${indexCode} · ${indexName}`}</option>
                 )}
                 {selRegion?.grid_cells > 0 && indicators.map((i) => (
                   <option key={i.code} value={i.code}>{`${i.code} · ${i.name}`}</option>
@@ -1381,14 +1388,28 @@ export default function App() {
                 </div>
                 <table className="metrics" style={{ marginTop: 8, fontSize: 11 }}>
                   <tbody>
-                    {composite.layers.map((l) => (
-                      <tr key={l.indicator}>
-                        <td title={l.direction === "inverse" ? "обратное действие: больше — хуже" : "прямое действие"}>
-                          {l.indicator}{l.direction === "inverse" ? " ↓" : ""}
-                        </td>
-                        <td>{(l.weight * 100).toFixed(0)}%</td>
-                      </tr>
-                    ))}
+                    {composite.layers.map((l) => {
+                      // полное описание в нативном title: панель с overflow-y
+                      // обрезала бы абсолютно позиционированную подсказку
+                      const meta = indicators.find((i) => i.code === l.indicator);
+                      const dir = l.direction === "inverse"
+                        ? "обратное действие: больше — хуже, балл считается от максимума"
+                        : "прямое действие: больше — лучше";
+                      const text = [meta?.name ?? l.indicator,
+                                   meta?.unit ? `Единица: ${meta.unit}` : null,
+                                   dir,
+                                   `Вес в своде: ${(l.weight * 100).toFixed(0)}%`,
+                                   `Размах слоя: ${fmt(l.raw_min)}…${fmt(l.raw_max)} (нормируется в 0…100)`,
+                                  ].filter(Boolean).join("\n");
+                      return (
+                        <tr key={l.indicator} className="tip-row"
+                            onMouseEnter={showTip(text)} onMouseMove={showTip(text)}
+                            onMouseLeave={hideTip}>
+                          <td>{l.indicator}{l.direction === "inverse" ? " ↓" : ""}</td>
+                          <td>{(l.weight * 100).toFixed(0)}%</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
                 {composite.missing_masks?.length > 0 && (
@@ -1566,6 +1587,23 @@ export default function App() {
             {scaleMode === "russia" ? ", единая по РФ" : ""}. Яркость = присутствие среды
           </div>
         </div>
+      )}
+
+      {tip && (
+        // В нижней половине окна цепляем подсказку НАД курсором (bottom вместо
+        // top): высота её заранее не известна (текст переносится), и клампом по
+        // top она всё равно обрезалась бы у нижнего края.
+        <div className="tip" style={(() => {
+          // innerWidth/innerHeight могут быть 0 (скрытый/встроенный вьюпорт) —
+          // тогда сваливаемся на clientHeight, иначе кламп даст отрицательные
+          // координаты и подсказка уедет за экран
+          const vw = window.innerWidth || document.documentElement.clientWidth || 1280;
+          const vh = window.innerHeight || document.documentElement.clientHeight || 800;
+          return {
+            left: Math.max(8, Math.min(tip.x + 14, vw - 340)),
+            ...(tip.y > vh / 2 ? { bottom: vh - tip.y + 14 } : { top: tip.y + 14 }),
+          };
+        })()}>{tip.text}</div>
       )}
 
       {active && !isIndex && (
