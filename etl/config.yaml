@@ -24,6 +24,9 @@ regions:
     border: "data/processed/border_krasnodar.gpkg"
     cities: "data/processed/cities_krasnodar.csv"
     roads: "data/processed/graphs/roads_krasnodar.graphml"
+    # csv посчитан и валиден (185691 строка = сетка края), но ссылки на него не
+    # было — Краснодар оставался единственным регионом без маски времени в пути
+    traveltime: "data/processed/traveltime_krasnodar.csv"
     railway: "data/processed/railway_krasnodar.csv"
     power: "data/processed/power_krasnodar.csv"
     territory: "data/processed/territory_krasnodar.csv"
