@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
       - run: helm lint deploy/helm/spatial-masks
-      - run: helm template demo deploy/helm/spatial-masks > /dev/null
+      - run: helm template demo deploy/helm/spatial-masks --set postgres.password=test > /dev/null
 
   images:
     runs-on: ubuntu-latest
