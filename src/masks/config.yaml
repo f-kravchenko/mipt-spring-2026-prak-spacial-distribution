@@ -1,4 +1,11 @@
 # Параметры системы аналитических масок
+#
+# ВНИМАНИЕ: рантайм (API/ETL) НЕ читает этот блок indicators — он берёт
+# показатели из etl/config.yaml, а r2/category из таблицы indicator (см.
+# main.default_weights). Здесь indicators нужен только weighting.resolve_weights
+# при офлайн-расчётах в ноутбуках. Новый показатель, добавленный ТОЛЬКО сюда,
+# на карте не появится: его надо дублировать в etl/config.yaml, в
+# VISIBLE_INDICATORS (index_config.py) и в COMPOSITE (composite_config.py).
 indicators:
   Y477090007:
     name: "Отгрузка обрабатывающей промышленности"
@@ -59,8 +66,11 @@ indicators:
     category: general
   Y477110176:
     name: "Используемые передовые производственные технологии"
+    category: industrial # технологии стоят на производственных площадках
+  Y477110352:
+    name: "Разработанные передовые производственные технологии"
     category: general
-  
+
 
 distances:
   city_sigma_km: 10.0

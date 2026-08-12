@@ -464,10 +464,21 @@ def composition_run(grid, regional_value, code, conf, params):
     )
 
 
+# Росстат кодирует отсутствие данных не пропуском строки, а сентинелом в самом
+# значении: -77777777 («данные не публикуются в целях конфиденциальности», ст. 4
+# п. 5 / ст. 9 п. 1 282-ФЗ, либо явления не было) и -99999999. В массиве таких
+# строк ~149 тыс. Попав в regional_value, сентинел ломает не один слой, а весь
+# регион: min-max нормировка свода (§4.1) растягивается на −7.8e7, и все
+# остальные ячейки сжимаются в ноль. Нашлось на Y477110352 в Якутии.
+MISSING_SENTINELS = (-77777777.0, -99999999.0)
+
+
 def regional_value_lookup(parquet_path, object_name, code, year,
                           subsection=None, object_level='Регион'):
     # Predicate/column pushdown: читаем только подходящие строки, а не весь
     # массив (~2 млн строк, ~2 ГБ в памяти) — иначе OOM при чтении 3 раза.
+    # year <= year, а не == : по §4.2 методики при отсутствии данных за отчётный
+    # период берём последний доступный предыдущий (см. MISSING_SENTINELS).
     #
     # subsection обязателен для показателей с несколькими подразделами
     # (Y477090007 — четыре секции ОКВЭД на один object_name): без фильтра
@@ -479,16 +490,24 @@ def regional_value_lookup(parquet_path, object_name, code, year,
         columns=['object_name', 'object_level', 'year', 'indicator_code',
                  'indicator_value', 'subsection'],
         filters=[('indicator_code', '==', code), ('object_level', '==', object_level),
-                 ('year', '==', year), ('object_name', '==', object_name)],
+                 ('year', '<=', year), ('object_name', '==', object_name)],
     )
     if subsection is not None:
         df = df[df['subsection'] == subsection]
+    df = df[~df['indicator_value'].isin(MISSING_SENTINELS)].dropna(
+        subset=['indicator_value'])
+    if df.empty:
+        return None
+    latest = int(df['year'].max())
+    df = df[df['year'] == latest]
     if len(df) > 1:
         print(f"  ВНИМАНИЕ: {code}/{object_name}: {len(df)} строк "
               f"(подразделы: {df['subsection'].unique().tolist()}) — задайте "
               f"indicators.{code}.subsection в конфиге; взята первая")
-    sel = df['indicator_value'].values
-    return float(sel[0]) if len(sel) else None
+    if latest != year:
+        print(f"  ПРИМЕЧАНИЕ (§4.2): {code}/{object_name} за {year} не "
+              f"опубликован — взят {latest} г.")
+    return float(df['indicator_value'].values[0])
 
 
 def _num(x):
@@ -549,6 +568,9 @@ def main():
             if val is None:
                 print(f"  нет значения {code} для {reg['object_name']} — пропуск показателя")
                 continue
+            # страховка на будущее: сентинел в regional_value портит весь регион,
+            # а не один слой (см. MISSING_SENTINELS) — лучше упасть, чем залить
+            assert val > -1e6, f"{code}/{reg['object_name']}: сентинел {val} прошёл фильтр"
             regional_values[code] = val
 
         load_mask_values(engine, grid, code_to_id, slug_to_id, list(regional_values), params)

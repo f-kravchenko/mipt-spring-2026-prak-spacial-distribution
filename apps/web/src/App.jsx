@@ -1389,8 +1389,9 @@ export default function App() {
                 <table className="metrics" style={{ marginTop: 8, fontSize: 11 }}>
                   <tbody>
                     {composite.layers.map((l) => {
-                      // полное описание в нативном title: панель с overflow-y
-                      // обрезала бы абсолютно позиционированную подсказку
+                      // полное описание — в своей подсказке (.tip, position:
+                      // fixed): панель с overflow-y обрезала бы абсолютно
+                      // позиционированную, а нативный title всплывает с задержкой
                       const meta = indicators.find((i) => i.code === l.indicator);
                       const dir = l.direction === "inverse"
                         ? "обратное действие: больше — хуже, балл считается от максимума"

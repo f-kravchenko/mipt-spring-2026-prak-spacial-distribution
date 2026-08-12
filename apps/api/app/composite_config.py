@@ -21,7 +21,7 @@ tile_composition (миграция 0011 добавила ему off ровно �
 
 ponytail: линеаризация точна, пока ни у одного показателя нет веса на
 regression_mask. Эта маска единственная зависит от показателя (своя на каждый
-код), и в один коэффициент Aₘ её не свернуть. Сейчас у всех восьми видимых
+код), и в один коэффициент Aₘ её не свернуть. Сейчас у всех видимых
 показателей эластичности нет — regression-строк в БД для них не существует, и
 вес на неё был бы весом в пустоту. /api/composite это проверяет и отказывается
 считать, а не выдаёт молча неверный слой. Когда эластичности появятся —
@@ -81,6 +81,43 @@ COMPOSITE = {
         "direction": "direct", "indicator_weight": 0.10,
         "masks": {"worldpop_mask": 0.40, "distance_to_city_mask": 0.30,
                   "road_network_mask": 0.15, "territory_type_mask": 0.15},
+    },
+    # Научно-технологический блок. Общая логика весов масок: наука и патенты
+    # концентрируются в вузовско-академических центрах, поэтому у них главная
+    # маска — distance_to_center вместе с worldpop; используемые технологии
+    # стоят на площадках, поэтому у них ведут territory/road/railway/power.
+    "Y477110309": {  # Подано патентных заявок на изобретения
+        "direction": "direct", "indicator_weight": 0.10,
+        "masks": {"worldpop_mask": 0.45, "distance_to_center_mask": 0.30,
+                  "distance_to_city_mask": 0.15, "territory_type_mask": 0.10},
+    },
+    "Y477110473": {  # Персонал НИОКР: исследователи
+        "direction": "direct", "indicator_weight": 0.10,
+        "masks": {"worldpop_mask": 0.40, "distance_to_center_mask": 0.35,
+                  "distance_to_city_mask": 0.15, "territory_type_mask": 0.10},
+    },
+    "Y477110259": {  # Организации, выполнявшие научные исследования
+        "direction": "direct", "indicator_weight": 0.08,
+        "masks": {"worldpop_mask": 0.35, "distance_to_center_mask": 0.35,
+                  "distance_to_city_mask": 0.20, "road_network_mask": 0.10},
+    },
+    "Y477110176": {  # Используемые передовые производственные технологии
+        "direction": "direct", "indicator_weight": 0.08,
+        "masks": {"territory_type_mask": 0.30, "road_network_mask": 0.20,
+                  "worldpop_mask": 0.20, "railway_mask": 0.15,
+                  "power_lines_mask": 0.15},
+    },
+    "Y477110352": {  # Разработанные передовые производственные технологии
+        "direction": "direct", "indicator_weight": 0.07,
+        "masks": {"distance_to_center_mask": 0.35, "worldpop_mask": 0.30,
+                  "territory_type_mask": 0.20, "road_network_mask": 0.15},
+    },
+    "Y477110295": {  # Плотность автодорог с твёрдым покрытием
+        # единственный показатель, у которого есть прямой пространственный
+        # аналог среди масок — road_network и берёт половину веса
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"road_network_mask": 0.50, "road_traveltime_mask": 0.25,
+                  "worldpop_mask": 0.15, "distance_to_city_mask": 0.10},
     },
 }
 
