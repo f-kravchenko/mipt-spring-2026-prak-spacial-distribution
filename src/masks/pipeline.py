@@ -1,11 +1,11 @@
 """
-Главный пайплайн системы аналитических масок (10 масок).
+Главный пайплайн системы аналитических масок (11 масок).
 """
 
 import numpy as np
 from src.masks import (
     baseline, worldpop, regression, distance_to_city, distance_to_center,
-    territory, road_network, railway, road_traveltime, power, composition,
+    territory, road_network, railway, road_traveltime, power, science, composition,
     weighting,
 )
 
@@ -25,6 +25,7 @@ AVAILABLE_MASKS = {
     'railway': railway.compute_railway_mask,
     'road_traveltime': road_traveltime.compute_traveltime_mask,
     'power': power.compute_power_mask,
+    'science': science.compute_science_mask,
 }
 
 
@@ -58,6 +59,8 @@ def compute_all_masks(grid, indicator_code, masks_to_use=None, params=None):
             result[name] = road_traveltime.compute_traveltime_mask(grid)
         elif name == 'power':
             result[name] = power.compute_power_mask(grid)
+        elif name == 'science':
+            result[name] = science.compute_science_mask(grid)
     return result
 
 

@@ -1,5 +1,5 @@
 """
-Расчёт масок railway / power / territory / traveltime для региона БЕЗ osmnx.
+Расчёт масок railway / power / territory / traveltime / science для региона БЕЗ osmnx.
 
 Зачем отдельный скрипт. scripts/compute_infra_masks.py, compute_territory.py и
 compute_traveltime.py требуют osmnx (а traveltime — ещё и заранее скачанный
@@ -15,6 +15,7 @@ slim-образе ETL.
     w = norm(exp(-d/10км)), d — расстояние в метрах EPSG:3857 (как в
     compute_infra_masks._weights_to_features);
   * power:   линии power=line, w = norm(exp(-d/8км));
+  * science: НИИ/вузы/колледжи/office=research, w = norm(exp(-d/15км));
   * territory: балл класса landuse/natural/aeroway полигона, в который попал
     ЦЕНТРОИД ячейки (баллы из src/masks/territory_scores.yaml), иначе 0;
   * traveltime: t = время по сети + подъезд от ячейки и от города по прямой на
@@ -59,6 +60,7 @@ MIRRORS = [
 HEADERS = {"User-Agent": "mipt-deaggr-etl/1.0 (practicum research)"}
 SIGMA_RAIL_KM = 10.0
 SIGMA_POWER_KM = 8.0
+SIGMA_SCIENCE_KM = 15.0  # = src.masks.science.SIGMA_KM
 SIGMA_MIN = 30.0     # = src.masks.road_traveltime.SIGMA_MIN
 OFFROAD_KMH = 25.0   # = src.spatial_decay.OFFROAD_KMH
 BUFFER_KM = 30.0     # города в этом буфере от сетки (как в compute_traveltime)
@@ -117,6 +119,31 @@ def fetch_railway(bbox_tiles):
                 g = [(p["lon"], p["lat"]) for p in el["geometry"]]
                 pts.append((float(np.mean([p[0] for p in g])), float(np.mean([p[1] for p in g]))))
         print(f"  ЖД тайл {i}/{len(bbox_tiles)}: всего точек {len(pts)}", flush=True)
+        time.sleep(4)
+    return pts
+
+
+def fetch_science(bbox_tiles):
+    """Научно-образовательные объекты: НИИ, вузы, колледжи, офисы research.
+
+    Полигоны сводим к центроиду — для затухания до ближайшей точки этого
+    достаточно (кампус меньше σ=15 км).
+    """
+    pts = []
+    sel = ('node["amenity"~"^(research_institute|university|college)$"]',
+           'way["amenity"~"^(research_institute|university|college)$"]',
+           'node["office"="research"]', 'way["office"="research"]',
+           'way["building"="university"]')
+    for i, (s, w, n, e) in enumerate(bbox_tiles, 1):
+        body = "".join(f"{f}({s},{w},{n},{e});" for f in sel)
+        for el in overpass(body):
+            if el["type"] == "node":
+                pts.append((el["lon"], el["lat"]))
+            elif el.get("geometry"):
+                g = el["geometry"]
+                pts.append((float(np.mean([p["lon"] for p in g])),
+                            float(np.mean([p["lat"] for p in g]))))
+        print(f"  наука тайл {i}/{len(bbox_tiles)}: всего точек {len(pts)}", flush=True)
         time.sleep(4)
     return pts
 
@@ -244,7 +271,8 @@ def main():
     ap.add_argument("--grid", required=True)
     ap.add_argument("--cities", required=True)
     ap.add_argument("--out-slug", required=True)
-    ap.add_argument("--only", help="через запятую: railway,power,territory,traveltime")
+    ap.add_argument("--only", help="через запятую: railway,power,territory,"
+                                   "traveltime,science")
     ap.add_argument("--tile-deg", type=float, default=1.5)
     a = ap.parse_args()
     want = set((a.only or "railway,power,territory,traveltime").split(","))
@@ -271,6 +299,10 @@ def main():
         pts = fetch_railway(bt)
         arr = np.array([to3857(x, y) for x, y in pts]) if pts else np.empty((0, 2))
         save("railway", decay_to_points(cents, arr, SIGMA_RAIL_KM))
+    if "science" in want:
+        pts = fetch_science(bt)
+        arr = np.array([to3857(x, y) for x, y in pts]) if pts else np.empty((0, 2))
+        save("science", decay_to_points(cents, arr, SIGMA_SCIENCE_KM))
     if "power" in want:
         pts = fetch_power(bt)
         arr = np.array([to3857(x, y) for x, y in pts]) if pts else np.empty((0, 2))

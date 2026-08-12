@@ -17,6 +17,7 @@ regions:
     railway: "data/processed/railway_moscow.csv"
     power: "data/processed/power_moscow.csv"
     territory: "data/processed/territory_moscow.csv"
+    science: "data/processed/science_moscow.csv"
   - slug: krasnodar
     name: "Краснодарский край"
     object_name: "Краснодарский край"
@@ -30,6 +31,7 @@ regions:
     railway: "data/processed/railway_krasnodar.csv"
     power: "data/processed/power_krasnodar.csv"
     territory: "data/processed/territory_krasnodar.csv"
+    science: "data/processed/science_krasnodar.csv"
   - slug: yakutia_center
     name: "Республика Саха (Якутия), центр"
     object_name: "Республика Саха (Якутия)"
@@ -41,6 +43,7 @@ regions:
     power: "data/processed/power_yakutia.csv"
     territory: "data/processed/territory_yakutia.csv"
     traveltime: "data/processed/traveltime_yakutia.csv"
+    science: "data/processed/science_yakutia.csv"
   # slug совпадает с ИКГС-регионом НАМЕРЕННО: это один и тот же регион с двумя
   # наборами ячеек (как у МО/Краснодара/Якутии). Фронт берёт по slug статику
   # novosibirsk_ikgs_*.geojson, менять его нельзя. Сетку/границу/города собрал
@@ -59,6 +62,8 @@ regions:
     power: "data/processed/power_novosibirsk.csv"
     territory: "data/processed/territory_novosibirsk.csv"
     traveltime: "data/processed/traveltime_novosibirsk.csv"
+    # научно-образовательная инфраструктура — 11-я маска, тот же скрипт
+    science: "data/processed/science_novosibirsk.csv"
 
 indicators:
   Y477090007:
@@ -144,6 +149,15 @@ indicators:
     name: "Разработанные передовые производственные технологии"
     unit: "единиц"
     indicator_type: general
+  # Ближайший доступный прокси к пункту ТЗ «объём поддержки организаций ВТНО»:
+  # порталы по бюджету (budget.gov.ru) отдельной строки по ВТНО не публикуют, а
+  # это — вся сумма, которую организации региона тратят на инновации, включая
+  # бюджетную поддержку. Точную бюджетную часть без ручного разбора актов не
+  # выделить, поэтому пункт закрыт частично.
+  Y477110102:
+    name: "Затраты на инновационную деятельность организаций"
+    unit: "млн руб."
+    indicator_type: industrial
 
 # Итоговая композиция (как у Полины) + конфигурации ablation (§9.5 ТЗ).
 final_weights:

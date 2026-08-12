@@ -23,7 +23,7 @@ from sqlalchemy import create_engine, text
 # Логика масок переиспользуется как есть — единый источник истины.
 from src.masks import (
     baseline, territory, worldpop, regression, distance_to_city, distance_to_center, composition,
-    road_network, road_traveltime, railway, power,
+    road_network, road_traveltime, railway, power, science,
 )
 from src.masks import metrics
 from src.masks.pipeline import UndefinedMaskSet
@@ -46,15 +46,18 @@ LAYER_MASKS = {
     'railway': railway,
     'power': power,
     'territory': territory,
+    'science': science,
 }
 
 # Маски с предрасчитанным весом в CSV (cell_code, weight): конфиг-ключ -> pipeline-ключ.
-# Считаются оффлайн (osmnx), грузятся load_csv_mask — в slim-ETL нет osmnx.
+# Считаются оффлайн (osmnx или scripts/compute_masks_overpass), грузятся
+# load_csv_mask — в slim-ETL нет osmnx.
 CSV_MASKS = {
     'traveltime': 'road_traveltime',
     'railway': 'railway',
     'power': 'power',
     'territory': 'territory',
+    'science': 'science',
 }
 
 # RU тип влияния из MASK_DESCRIPTION -> enum influence_kind

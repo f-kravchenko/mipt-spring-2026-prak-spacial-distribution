@@ -82,35 +82,43 @@ COMPOSITE = {
         "masks": {"worldpop_mask": 0.40, "distance_to_city_mask": 0.30,
                   "road_network_mask": 0.15, "territory_type_mask": 0.15},
     },
-    # Научно-технологический блок. Общая логика весов масок: наука и патенты
-    # концентрируются в вузовско-академических центрах, поэтому у них главная
-    # маска — distance_to_center вместе с worldpop; используемые технологии
-    # стоят на площадках, поэтому у них ведут territory/road/railway/power.
+    # Научно-технологический блок. Ведущая маска — science_mask (НИИ, вузовские
+    # кампусы, академгородки): у науки есть конкретные точки, и до появления
+    # этой маски её приходилось приближать «где центр региона» + «где живут
+    # люди», что для патентов и НИОКР заведомо неверно. Используемые технологии
+    # и затраты на инновации — это уже производство, у них ведут
+    # territory/road/railway/power, а science идёт добавкой.
     "Y477110309": {  # Подано патентных заявок на изобретения
         "direction": "direct", "indicator_weight": 0.10,
-        "masks": {"worldpop_mask": 0.45, "distance_to_center_mask": 0.30,
-                  "distance_to_city_mask": 0.15, "territory_type_mask": 0.10},
+        "masks": {"science_mask": 0.40, "worldpop_mask": 0.30,
+                  "distance_to_center_mask": 0.20, "distance_to_city_mask": 0.10},
     },
     "Y477110473": {  # Персонал НИОКР: исследователи
         "direction": "direct", "indicator_weight": 0.10,
-        "masks": {"worldpop_mask": 0.40, "distance_to_center_mask": 0.35,
-                  "distance_to_city_mask": 0.15, "territory_type_mask": 0.10},
+        "masks": {"science_mask": 0.45, "worldpop_mask": 0.30,
+                  "distance_to_center_mask": 0.15, "distance_to_city_mask": 0.10},
     },
     "Y477110259": {  # Организации, выполнявшие научные исследования
         "direction": "direct", "indicator_weight": 0.08,
-        "masks": {"worldpop_mask": 0.35, "distance_to_center_mask": 0.35,
-                  "distance_to_city_mask": 0.20, "road_network_mask": 0.10},
+        "masks": {"science_mask": 0.45, "worldpop_mask": 0.25,
+                  "distance_to_center_mask": 0.20, "road_network_mask": 0.10},
     },
     "Y477110176": {  # Используемые передовые производственные технологии
         "direction": "direct", "indicator_weight": 0.08,
-        "masks": {"territory_type_mask": 0.30, "road_network_mask": 0.20,
-                  "worldpop_mask": 0.20, "railway_mask": 0.15,
-                  "power_lines_mask": 0.15},
+        "masks": {"territory_type_mask": 0.28, "road_network_mask": 0.18,
+                  "worldpop_mask": 0.17, "railway_mask": 0.14,
+                  "power_lines_mask": 0.13, "science_mask": 0.10},
     },
     "Y477110352": {  # Разработанные передовые производственные технологии
         "direction": "direct", "indicator_weight": 0.07,
-        "masks": {"distance_to_center_mask": 0.35, "worldpop_mask": 0.30,
-                  "territory_type_mask": 0.20, "road_network_mask": 0.15},
+        "masks": {"science_mask": 0.35, "worldpop_mask": 0.25,
+                  "distance_to_center_mask": 0.20, "territory_type_mask": 0.20},
+    },
+    "Y477110102": {  # Затраты на инновационную деятельность организаций
+        "direction": "direct", "indicator_weight": 0.10,
+        "masks": {"science_mask": 0.30, "territory_type_mask": 0.25,
+                  "worldpop_mask": 0.20, "road_network_mask": 0.15,
+                  "railway_mask": 0.10},
     },
     "Y477110295": {  # Плотность автодорог с твёрдым покрытием
         # единственный показатель, у которого есть прямой пространственный
