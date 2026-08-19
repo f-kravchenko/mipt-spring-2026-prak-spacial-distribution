@@ -21,3 +21,7 @@ pyyaml>=6.0
 # Overpass: fetch_index_region (границы НП, координаты городов) и build_grid
 # (place=city|town в cities.csv) — иначе эти шаги гоняются только с хоста
 requests>=2.31
+# Excel: scripts/scrape_nauka_nso читает публикации Новосибирскстата по форме
+# 2-наука — openpyxl для xlsx, xlrd для старых OLE2-файлов (.xls)
+openpyxl>=3.1
+xlrd>=2.0
