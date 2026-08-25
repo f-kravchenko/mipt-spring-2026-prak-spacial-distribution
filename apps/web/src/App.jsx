@@ -569,8 +569,17 @@ export default function App() {
     const reg = regions.find((r) => r.id === regionId);
     if (!map || !mapReady || !reg) return;
     const b = reg.bbox;
-    map.setMaxBounds(padBounds(b));
+    map.setMaxBounds(null);
     map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 40, duration: 800 });
+    // maxBounds строим по РЕАЛЬНОМУ кадру после fitBounds, а не по bbox: в широком
+    // окне кадр шире bbox, рамка из bbox оказывалась уже вьюпорта по долготе и
+    // maplibre намертво зажимал горизонтальный пан (двигалось только по вертикали).
+    const clamp = () => {
+      const v = map.getBounds();
+      map.setMaxBounds(padBounds([v.getWest(), v.getSouth(), v.getEast(), v.getNorth()]));
+    };
+    map.once("moveend", clamp);
+    return () => map.off("moveend", clamp);
   }, [regionId, regions, mapReady]);
 
   // Подсветка региона на мини-карте: заливаем его полигон в russia.geojson.
