@@ -64,8 +64,19 @@ def compute_all_masks(grid, indicator_code, masks_to_use=None, params=None):
     return result
 
 
+def rate_base_values(grid, rate_base):
+    """Знаменатель удельного показателя по ячейкам: 'population' — население,
+    'area' — площадь ячейки (см. composition.distribute_rate)."""
+    column = {'population': 'population', 'area': 'area_km2'}.get(rate_base)
+    if column is None:
+        raise ValueError(f"неизвестный rate_base: {rate_base}")
+    if column not in grid:
+        raise ValueError(f"в сетке нет столбца {column} для rate_base={rate_base}")
+    return np.nan_to_num(np.asarray(grid[column], dtype=float), nan=0.0)
+
+
 def run_pipeline(grid, regional_value, indicator_code, mask_weights=None, masks_to_use=None,
-                 exclusion_masks=None, smoothing_alpha=None, params=None):
+                 exclusion_masks=None, smoothing_alpha=None, params=None, rate_base=None):
     # Автоподбор весов (weighting.resolve_weights, §9 "обоснование весов")
     # включается ТОЛЬКО если не задано ни mask_weights, ни masks_to_use —
     # это случай "дай разумные веса по умолчанию под этот показатель".
@@ -105,14 +116,24 @@ def run_pipeline(grid, regional_value, indicator_code, mask_weights=None, masks_
 
     # Пики здесь не считаются: живой путь — percentile_cont в SQL
     # (_AGG_SQL/_PEAK_POINTS_SQL в apps/api/app/main.py).
-    values = composition.distribute_value(composed, regional_value)
-    sum_preserved = composition.check_sum_preservation(values, regional_value)
+    #
+    # rate_base задан -> показатель удельный (ставка), у него сохраняется
+    # взвешенное среднее, а не сумма: ставка не аддитивна (см. миграцию 0013 и
+    # composition.distribute_rate). sum_preserved в обоих случаях означает
+    # «инвариант выполнен» — свой у каждого типа показателя.
+    if rate_base:
+        base = rate_base_values(grid, rate_base)
+        values = composition.distribute_rate(composed, regional_value, base)
+        invariant_ok = composition.check_mean_preservation(values, base, regional_value)
+    else:
+        values = composition.distribute_value(composed, regional_value)
+        invariant_ok = composition.check_sum_preservation(values, regional_value)
 
     return {
         'masks': masks,
         'composed': composed,
         'values': values,
-        'sum_preserved': sum_preserved,
+        'sum_preserved': invariant_ok,
         'regional_value': regional_value,
         'actual_sum': float(values.sum()),
     }

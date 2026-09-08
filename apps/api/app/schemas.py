@@ -34,6 +34,10 @@ class Indicator(BaseModel):
     # Итог по РФ (та же единица, что у региональных значений) — для режима
     # "Россия": доля ячейки = value / national_total. См. миграцию 0008.
     national_total: float | None = None
+    # Удельный показатель (ставка) и знаменатель ставки: 'population' | 'area'.
+    # None — объёмный показатель (Σ по ячейкам = региональный итог). Ставка не
+    # аддитивна, у неё сохраняется взвешенное среднее — см. миграцию 0013.
+    rate_base: str | None = None
 
 
 class Mask(BaseModel):
@@ -60,7 +64,13 @@ class RecomputeRequest(BaseModel):
 class RecomputeResult(BaseModel):
     tile_url: str
     value_max: float | None = None
+    # Минимум по ячейкам. У объёмного показателя это ~0 и шкала строится от нуля;
+    # у ставки с отрицательным значением (естественная убыль) весь диапазон лежит
+    # ниже нуля, и без min шкалу не построить — см. миграцию 0013.
+    value_min: float | None = None
     regional_value: float | None = None
+    # Знаменатель ставки ('population' | 'area'); None — объёмный показатель.
+    rate_base: str | None = None
     metrics: dict[str, float]
     # Порог "пика" на суммарном слое (top 5% ненулевых ячеек, percentile_cont
     # в _AGG_SQL). Уже в единицах распределения (масштабирован тем же rv/total, что и

@@ -434,21 +434,42 @@ export default function App() {
   // У свода значение — уже балл 0..100 (§4.1), «база = итог/ячейки» для него не
   // определена: регионального итога у свода нет. База null включает линейный
   // фолбэк 0..vmax, то есть ровно шкалу 0..100.
-  const territoryBase = !isComposite && liveComp?.regional_value > 0 && selRegionCells > 0
-    ? liveComp.regional_value / selRegionCells : null;
-  const distBase = !isComposite && scaleMode === "russia" && globalScale?.base_cell > 0
-    ? globalScale.base_cell : territoryBase;
+  // Удельный показатель (ставка): база сравнения — САМА региональная ставка, а
+  // не «итог/ячейки» (ставки не складываются, размазывать их нечего). Тогда
+  // LQ = ставка ячейки / ставка региона, и для отрицательной ставки
+  // (естественная убыль) LQ>1 читается как «убыль сильнее средней по региону».
+  // См. rate_base и миграцию 0013.
+  const isRate = !!liveComp?.rate_base;
+  const territoryBase = isComposite ? null
+    : isRate ? (liveComp?.regional_value || null)
+    : (liveComp?.regional_value > 0 && selRegionCells > 0
+        ? liveComp.regional_value / selRegionCells : null);
+  // база РФ: у объёмного — base_cell (итог/ячейки по всем регионам), у ставки
+  // API отдаёт в base_cell российскую ставку (см. /api/global-scale)
+  const russiaBase = !isComposite && scaleMode === "russia" ? globalScale?.base_cell : null;
+  const distBase = (isRate ? russiaBase : russiaBase > 0 ? russiaBase : null) ?? territoryBase;
   const distVmax = liveComp?.value_max > 0 ? liveComp.value_max : 1;
   // для тултипа: читается из хендлера hover через ref, чтобы смена режима
   // шкалы не попадала в зависимости эффекта создания слоя (не пересоздавать
   // источник ради подписи)
   const distBaseRef = useRef(null);
   distBaseRef.current = distBase;
-  const distFillColor = (base) => ["interpolate", ["linear"], ["get", "value"],
-    ...(base > 0
-      ? LQ_MULTS.flatMap((m, i) => [base * m, DIST_STOPS[i]])
-      // фолбэк, пока база не готова: линейная шкала 0..vmax
-      : DIST_STOPS.flatMap((c, i) => [distVmax * i / (DIST_STOPS.length - 1), c]))];
+  // Стопы задаются в КРАТНЫХ базы (LQ), а само выражение делит значение на
+  // базу. Для base>0 это тождественно прежней записи (стопы base*m), но для
+  // отрицательной базы (убыль) стопы base*m шли бы по убыванию — MapLibre
+  // требует строго возрастающих входов и отверг бы выражение.
+  const distFillColor = (base) => (base
+    ? ["interpolate", ["linear"], ["/", ["get", "value"], base],
+        ...LQ_MULTS.flatMap((m, i) => [m, DIST_STOPS[i]])]
+    // фолбэк, пока база не готова: линейная шкала min..max по фактическому
+    // диапазону (у ставки он может целиком лежать ниже нуля)
+    : ["interpolate", ["linear"], ["get", "value"],
+        ...DIST_STOPS.flatMap((c, i) => {
+          const lo = liveComp?.value_min ?? 0;
+          const hi = liveComp?.value_max ?? distVmax;
+          const span = hi - lo || 1;
+          return [lo + span * i / (DIST_STOPS.length - 1), c];
+        })]);
 
   // Переключение Территория/Россия меняет ТОЛЬКО paint-свойство готового слоя
   // (setPaintProperty — мгновенная перекраска уже загруженных тайлов).
@@ -845,13 +866,23 @@ export default function App() {
       const v = Number(e.features[0].properties.value);
       map.getCanvas().style.cursor = "pointer";
       const unit = indMeta?.unit ? ` ${indMeta.unit}` : "";
-      const rows = [`Абсолютно: <b>${fmt(v)}</b>${unit}`];
-      if (distBaseRef.current > 0)
+      // Ставку нельзя показывать как «долю территории/России» — она не
+      // аддитивна (см. миграцию 0013): сравниваем ставку ячейки со ставкой
+      // региона и РФ, а не считаем от них проценты.
+      const isRateInd = !!dist.rate_base;
+      const rows = [`${isRateInd ? "Ставка" : "Абсолютно"}: <b>${fmt(v)}</b>${unit}`];
+      if (distBaseRef.current)
         rows.push(`Концентрация: ×${fmt(v / distBaseRef.current)} базовой`);
-      if (dist.regional_value > 0)
-        rows.push(`Доля территории: ${fmt((v / dist.regional_value) * 100)}%`);
-      if (indMeta?.national_total > 0)
-        rows.push(`Доля России: ${fmt((v / indMeta.national_total) * 100)}%`);
+      if (isRateInd) {
+        if (dist.regional_value) rows.push(`Регион: ${fmt(dist.regional_value)}${unit}`);
+        if (indMeta?.national_total != null)
+          rows.push(`Россия: ${fmt(indMeta.national_total)}${unit}`);
+      } else {
+        if (dist.regional_value > 0)
+          rows.push(`Доля территории: ${fmt((v / dist.regional_value) * 100)}%`);
+        if (indMeta?.national_total > 0)
+          rows.push(`Доля России: ${fmt((v / indMeta.national_total) * 100)}%`);
+      }
       hoverPopup.setLngLat(e.lngLat).setHTML(rows.join("<br>")).addTo(map);
     };
     const onLeave = () => {
@@ -1187,13 +1218,15 @@ export default function App() {
   // Легенда: шкала в кратных базовой концентрации (base = показатель /
   // число ячеек — значение ячейки при равномерном размазывании). Жёлтая
   // середина = ×1 базы; тёплые ступени лог-кратные (×4, ≥×16).
-  const rfReady = scaleMode === "russia" && globalScale?.base_cell > 0;
+  const rfReady = scaleMode === "russia" && !!globalScale?.base_cell;
+  // У ставки база — сама ставка (региона или РФ), «на ячейку» её делить нельзя
+  const perCell = isRate ? "" : "/ячейку";
   const legendTitle = isComposite
     ? "Комплексная оценка, балл 0…100 (§4.1: нормировка слоёв + веса показателей)"
     : rfReady
-    ? `Концентрация к базе РФ (${fmt(globalScale.base_cell)}/ячейку)`
+    ? `Концентрация к базе РФ (${fmt(globalScale.base_cell)}${perCell})`
     : scaleMode === "russia" ? "Распределение — считаем базу РФ…"
-    : `Концентрация к базе территории${distBase > 0 ? ` (${fmt(distBase)}/ячейку)` : ""}`;
+    : `Концентрация к базе территории${distBase ? ` (${fmt(distBase)}${perCell})` : ""}`;
   const legendMults = isComposite
     ? ["0", "25", "50", "75", "100"]
     : ["0", "×0.5", "×1", "×4", "≥×16"];

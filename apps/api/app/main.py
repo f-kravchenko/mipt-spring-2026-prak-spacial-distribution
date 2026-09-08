@@ -135,7 +135,8 @@ def indicators():
     остаются, скрыт лишь выбор в выпадашке. Порядок — ПО КОДУ: список в
     index_config задаёт состав, а не сортировку."""
     sql = text("""
-        SELECT code, name, unit, elasticity, r2, indicator_type, national_total
+        SELECT code, name, unit, elasticity, r2, indicator_type, national_total,
+               rate_base
         FROM indicator
         WHERE :all OR code = ANY(:codes)
         ORDER BY code
@@ -265,6 +266,9 @@ _RV_SQL = text("""
     ORDER BY id LIMIT 1
 """)
 
+# Удельный показатель (ставка) или объёмный — и знаменатель ставки (0013).
+_RATE_BASE_SQL = text("SELECT rate_base FROM indicator WHERE code = :c")
+
 # Взвешенная сумма масок по ячейкам + агрегаты для нормировки и метрик.
 # peak.p95 — 95-й перцентиль raw по ненулевым ячейкам региона (top 5%) —
 # используется ниже, чтобы посчитать peak_threshold в тех же единицах, что value_max.
@@ -275,14 +279,20 @@ _AGG_SQL = text("""
         WHERE (e.value)::double precision <> 0
     ),
     cell AS (
-        SELECT mcv.cell_id, sum(wt.w * mcv.weight) AS raw
+        -- basev — знаменатель удельного показателя по ячейке (0013): население
+        -- или площадь. У объёмного (:rb IS NULL) он не нужен и равен 0.
+        SELECT mcv.cell_id, sum(wt.w * mcv.weight) AS raw,
+               max(CASE WHEN :rb = 'area' THEN gc.area_km2
+                        WHEN :rb = 'population' THEN COALESCE(gc.population, 0)
+                        ELSE 0 END) AS basev
         FROM mask_cell_value mcv
         JOIN wt ON wt.mask_id = mcv.mask_id
         JOIN grid_cell gc ON gc.id = mcv.cell_id
         WHERE gc.region_id = :r AND mcv.indicator_code IN ('', :i)
         GROUP BY mcv.cell_id
     ),
-    agg AS (SELECT count(*) n, sum(raw) s, max(raw) mx FROM cell),
+    agg AS (SELECT count(*) n, sum(raw) s, max(raw) mx, min(raw) mn,
+                   sum(basev * raw) bw, sum(basev) b FROM cell),
     ordr AS (SELECT raw, row_number() OVER (ORDER BY raw) rn FROM cell),
     gini AS (
         SELECT (2.0 * sum(o.rn * o.raw) / NULLIF(a.n * a.s, 0) - (a.n + 1.0) / a.n) AS g
@@ -295,16 +305,25 @@ _AGG_SQL = text("""
         ) z
     ),
     peak AS (
-        -- по ненулевым ячейкам — см. комментарий в _PEAK_POINTS_SQL
+        -- по ненулевым ячейкам — см. комментарий в _PEAK_POINTS_SQL.
+        -- p05 нужен для ставки с отрицательным rv: множитель rv/scale < 0
+        -- переворачивает порядок, и «верхние 5% по значению» — это НИЖНИЕ
+        -- 5% по raw (см. recompute).
         SELECT CASE
             WHEN stddev(raw) < 0.01 * NULLIF(avg(raw), 0)
             THEN NULL
             ELSE percentile_cont(0.95) WITHIN GROUP (ORDER BY raw)
-        END AS p95
+        END AS p95,
+        CASE
+            WHEN stddev(raw) < 0.01 * NULLIF(avg(raw), 0)
+            THEN NULL
+            ELSE percentile_cont(0.05) WITHIN GROUP (ORDER BY raw)
+        END AS p05
         FROM cell WHERE raw > 0
     )
-    SELECT a.n AS n, a.s AS total, a.mx AS rawmax, g.g AS gini,
-           top.t10 AS t10, peak.p95 AS p95
+    SELECT a.n AS n, a.s AS total, a.mx AS rawmax, a.mn AS rawmin,
+           a.bw AS base_weighted, a.b AS base_total, g.g AS gini,
+           top.t10 AS t10, peak.p95 AS p95, peak.p05 AS p05
     FROM agg a CROSS JOIN gini g CROSS JOIN top CROSS JOIN peak
 """)
 
@@ -323,8 +342,10 @@ def recompute(req: RecomputeRequest):
         rv = conn.execute(_RV_SQL, {"r": req.region_id, "i": req.indicator}).scalar()
         if rv is None:
             raise HTTPException(404, "Нет композиции (regional_value) для региона/показателя")
+        rate_base = conn.execute(_RATE_BASE_SQL, {"c": req.indicator}).scalar()
         row = conn.execute(
-            _AGG_SQL, {"w": w_json, "r": req.region_id, "i": req.indicator}
+            _AGG_SQL,
+            {"w": w_json, "r": req.region_id, "i": req.indicator, "rb": rate_base},
         ).mappings().first()
 
     if not row or not row["n"] or not row["total"] or row["total"] <= 0:
@@ -332,24 +353,54 @@ def recompute(req: RecomputeRequest):
 
     rv = float(rv)
     total = float(row["total"])
-    # Показатель отдаётся В АБСОЛЮТНЫХ ВЕЛИЧИНАХ: доля ячейки в региональном
-    # итоге, Σ по ячейкам = итог. Нормировка в 0..100 понадобится будущему
-    # результирующему слою (для неё в tile_composition уже есть off, см. 0011),
-    # но отдельные показатели через неё не проводим.
-    value_max = float(row["rawmax"]) * rv / total
-    peak_threshold = float(row["p95"]) * rv / total if row["p95"] is not None else None
+    n = int(row["n"])
+    # Знаменатель нормировки — единственное, чем отличаются два типа показателей
+    # (см. миграцию 0013). tile_composition получает его тем же параметром total
+    # и остаётся без изменений: value = raw * rv / scale.
+    #
+    #   объёмный: scale = Σraw          -> Σ по ячейкам = rv
+    #   ставка:   scale = w̄ = Σ(base·raw)/Σbase
+    #                             -> Σ(base·value)/Σbase = rv (взвешенное среднее)
+    #
+    # Ставку делить между ячейками нельзя: она не аддитивна. Σ коэффициентов
+    # рождаемости по ячейкам не равна коэффициенту по региону, а при
+    # отрицательной ставке (естественная убыль) прежняя формула ещё и ломала
+    # шкалу и порог пиков.
+    if rate_base:
+        base_total = float(row["base_total"] or 0.0)
+        # нет знаменателя по ячейкам (нет населения/площади) — взвешенное
+        # среднее вырождается в обычное
+        scale = float(row["base_weighted"]) / base_total if base_total > 0 else total / n
+    else:
+        scale = total
+    if scale == 0:
+        raise HTTPException(422, "Нулевой знаменатель нормировки для этого показателя")
+
+    k = rv / scale
+    lo, hi = float(row["rawmin"]) * k, float(row["rawmax"]) * k
+    value_min, value_max = min(lo, hi), max(lo, hi)
+    # «Пик» — верхние 5% ПО ЗНАЧЕНИЮ. При k < 0 (убыль) это нижние 5% по raw,
+    # иначе фронт-фильтр value >= peak_threshold отбирал бы 95% ячеек.
+    pq = row["p95"] if k > 0 else row["p05"]
+    peak_threshold = float(pq) * k if pq is not None else None
     metrics = {
+        # Джини/top10 — по raw-весам (рельефу масок): метрики-отношения
+        # инвариантны к положительному масштабу, поэтому у объёмного показателя
+        # это ровно те же числа, а у ставки с отрицательным rv они остаются в
+        # своей области определения. Тот же выбор в etl.ingest.
         "gini": float(row["gini"]) if row["gini"] is not None else 0.0,
         "top10_share": float(row["t10"]) / total if total else 0.0,
-        "sum_error": 0.0,  # инвариант суммы выполнен по построению
+        # инвариант выполнен по построению; какой именно — зависит от типа
+        ("mean_error" if rate_base else "sum_error"): 0.0,
     }
     tile_url = (
         f"{TILES_BASE_URL}/tile_composition/{{z}}/{{x}}/{{y}}"
-        f"?region={req.region_id}&ind={req.indicator}&rv={rv}&total={total}"
+        f"?region={req.region_id}&ind={req.indicator}&rv={rv}&total={scale}"
         f"&w={quote(w_json)}"
     )
     return RecomputeResult(
-        tile_url=tile_url, value_max=value_max, regional_value=rv, metrics=metrics,
+        tile_url=tile_url, value_max=value_max, value_min=value_min,
+        regional_value=rv, rate_base=rate_base, metrics=metrics,
         peak_threshold=peak_threshold,
     )
 
@@ -470,14 +521,25 @@ _GLOBAL_SCALE_SQL = text("""
         ORDER BY region_id, id
     ),
     cell AS (
-        SELECT gc.region_id, mcv.cell_id, sum(wt.w * mcv.weight) AS raw
+        SELECT gc.region_id, mcv.cell_id, sum(wt.w * mcv.weight) AS raw,
+               max(CASE WHEN :rb = 'area' THEN gc.area_km2
+                        WHEN :rb = 'population' THEN COALESCE(gc.population, 0)
+                        ELSE 0 END) AS basev
         FROM mask_cell_value mcv
         JOIN wt ON wt.mask_id = mcv.mask_id
         JOIN grid_cell gc ON gc.id = mcv.cell_id
         WHERE mcv.indicator_code IN ('', :i)
         GROUP BY gc.region_id, mcv.cell_id
     ),
-    tot AS (SELECT region_id, sum(raw) AS total FROM cell GROUP BY region_id),
+    -- знаменатель нормировки — тот же, что в _AGG_SQL/recompute: у объёмного
+    -- показателя Σraw, у ставки взвешенное среднее веса (миграция 0013)
+    tot AS (
+        SELECT region_id,
+               CASE WHEN :rb IS NULL THEN sum(raw)
+                    WHEN sum(basev) > 0 THEN sum(basev * raw) / sum(basev)
+                    ELSE sum(raw) / count(*) END AS total
+        FROM cell GROUP BY region_id
+    ),
     vals AS (
         SELECT cell.raw / NULLIF(tot.total, 0) * rv.rv AS v
         FROM cell JOIN tot USING (region_id) JOIN rv USING (region_id)
@@ -514,21 +576,34 @@ def global_scale(
     w_json = json.dumps(weights_dict, ensure_ascii=False)
 
     with engine.connect() as conn:
+        meta = conn.execute(text(
+            "SELECT national_total, rate_base FROM indicator WHERE code = :c"
+        ), {"c": indicator}).mappings().first()
+        rate_base = meta["rate_base"] if meta else None
+        national = meta["national_total"] if meta else None
         row = conn.execute(
-            _GLOBAL_SCALE_SQL, {"w": w_json, "i": indicator}
+            _GLOBAL_SCALE_SQL, {"w": w_json, "i": indicator, "rb": rate_base}
         ).mappings().first()
-        national = conn.execute(
-            text("SELECT national_total FROM indicator WHERE code = :c"), {"c": indicator}
-        ).scalar()
 
-    if not row or row["p99"] is None:
+    # База сравнения. У объёмного показателя — «значение ячейки при равномерном
+    # размазывании» (Σитогов/Σячеек). У ставки это бессмысленно (ставки не
+    # складываются): база — сама ставка по РФ, и концентрация ячейки читается
+    # как отношение к российскому уровню.
+    base_cell = national if rate_base else row["base_cell"]
+    # 404 — только если базы шкалы действительно нет. По p99 гейтить нельзя:
+    # он считается по ячейкам v > 0, и у ставки, отрицательной во ВСЕХ
+    # загруженных регионах (естественная убыль без Якутии), выходил бы NULL —
+    # режим «Россия» молча падал бы на территориальную базу. Для ставки p99
+    # содержательной шкалой и не является, фронт берёт base_cell.
+    if not row or base_cell is None:
         raise HTTPException(404, "Нет данных для расчёта глобальной шкалы")
     return {
-        "p99": float(row["p99"]),
-        "value_max": float(row["vmax"]),
-        "cells": int(row["n"]),
-        "base_cell": float(row["base_cell"]) if row["base_cell"] is not None else None,
+        "p99": float(row["p99"]) if row["p99"] is not None else None,
+        "value_max": float(row["vmax"]) if row["vmax"] is not None else None,
+        "cells": int(row["n"] or 0),
+        "base_cell": float(base_cell) if base_cell is not None else None,
         "national_total": float(national) if national is not None else None,
+        "rate_base": rate_base,
     }
 
 

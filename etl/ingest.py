@@ -26,7 +26,7 @@ from src.masks import (
     road_network, road_traveltime, railway, power, science,
 )
 from src.masks import metrics
-from src.masks.pipeline import UndefinedMaskSet
+from src.masks.pipeline import UndefinedMaskSet, rate_base_values
 
 # Реестр масок: pipeline-ключ -> (модуль, зависит ли от показателя).
 # Веса считаются в python по столбцам сетки (load_mask_values).
@@ -133,16 +133,19 @@ def load_indicators(engine, indicators, parquet_path=None, year=None):
                     subsection=meta.get('subsection'), object_level='Страна')
             conn.execute(text("""
                 INSERT INTO indicator (code, name, unit, elasticity, r2, indicator_type,
-                                       national_total)
-                VALUES (:code, :name, :unit, :elasticity, :r2, :itype, :national)
+                                       national_total, rate_base)
+                VALUES (:code, :name, :unit, :elasticity, :r2, :itype, :national, :rate_base)
                 ON CONFLICT (code) DO UPDATE SET
                     name=EXCLUDED.name, unit=EXCLUDED.unit, elasticity=EXCLUDED.elasticity,
                     r2=EXCLUDED.r2, indicator_type=EXCLUDED.indicator_type,
-                    national_total=EXCLUDED.national_total
+                    national_total=EXCLUDED.national_total,
+                    rate_base=EXCLUDED.rate_base
             """), {
                 'code': code, 'name': meta['name'], 'unit': meta.get('unit'),
                 'elasticity': meta.get('elasticity'), 'r2': meta.get('r2'),
                 'itype': meta.get('indicator_type'), 'national': national,
+                # знаменатель ставки; None -> объёмный показатель (Σ = rv)
+                'rate_base': meta.get('rate_base'),
             })
 
 
@@ -340,7 +343,8 @@ def load_compositions(engine, region_id, grid, code_to_id, regional_values, cfg,
     for code, regional_value in regional_values.items():
         for conf in cfg['ablation']:
             try:
-                res = composition_run(grid, regional_value, code, conf, params)
+                res = composition_run(grid, regional_value, code, conf, params,
+                                      rate_base=cfg['indicators'][code].get('rate_base'))
             except UndefinedMaskSet as e:
                 print(f"  {code}/{conf['label']}: пропуск — {e}")
                 continue
@@ -366,11 +370,32 @@ def load_compositions(engine, region_id, grid, code_to_id, regional_values, cfg,
                     }).to_sql('distribution_cell', conn, if_exists='append', index=False,
                               chunksize=10000, method='multi')
 
+                # Джини/top10 считаем по РЕЛЬЕФУ масок (res['composed']), а не
+                # по значениям: обе метрики — отношения, то есть инвариантны к
+                # положительному масштабу, и для объёмного показателя дают ровно
+                # тот же результат (values = composed * rv/total). Зато для
+                # ставки с отрицательным rv (естественная убыль) Джини по
+                # значениям выходил за область определения — знак переворачивался
+                # (−0,515 вместо 0,515), а top10_share брал наименее
+                # концентрированные ячейки. Тот же выбор, что в _AGG_SQL живого
+                # пути: он тоже считает метрики по raw-весам.
+                composed = res['composed']
+                rate_base = cfg['indicators'][code].get('rate_base')
                 qm = {
-                    'gini': metrics.gini(values),
-                    'top10_share': metrics.top_share(values, 0.1),
-                    'sum_error': metrics.sum_error(values, regional_value),
+                    'gini': metrics.gini(composed),
+                    'top10_share': metrics.top_share(composed, 0.1),
                 }
+                # Инвариант: у объёмного — сумма, у ставки — взвешенное среднее
+                # (composition.distribute_rate). Метрика называется по существу,
+                # чтобы sum_error не значил разное у разных показателей.
+                if rate_base:
+                    base = rate_base_values(grid, rate_base)
+                    weighted_mean = (
+                        float((base * values).sum() / base.sum()) if base.sum() > 0
+                        else float(values.mean()))
+                    qm['mean_error'] = abs(weighted_mean - regional_value) / abs(regional_value)
+                else:
+                    qm['sum_error'] = metrics.sum_error(values, regional_value)
                 pd.DataFrame([
                     {'composition_id': comp_id, 'metric': k, 'value': v, 'scope': 'region'}
                     for k, v in qm.items()
@@ -459,11 +484,12 @@ def load_roads(engine, region_id, graphml_path):
     return len(gdf)
 
 
-def composition_run(grid, regional_value, code, conf, params):
+def composition_run(grid, regional_value, code, conf, params, rate_base=None):
     from src.masks.pipeline import run_pipeline
     return run_pipeline(
         grid=grid, regional_value=regional_value, indicator_code=code,
         masks_to_use=conf['masks'], mask_weights=conf['weights'], params=params,
+        rate_base=rate_base,
     )
 
 
@@ -534,6 +560,10 @@ def main():
     # обычно нужен ровно один — не трогая уже загруженные.
     ap.add_argument('--region', action='append', metavar='SLUG',
                     help='грузить только эти регионы (можно повторять)')
+    # Демонстрационный/точечный прогон: композиции только по нужным показателям.
+    # Справочник indicator грузится целиком всегда — фронт берёт из него названия.
+    ap.add_argument('--indicator', action='append', metavar='CODE',
+                    help='считать композиции только по этим показателям (можно повторять)')
     ap.add_argument('--store-cells', action='store_true',
                     help='писать distribution_cell (артефакт §9.5 ТЗ; ~7 ГБ на '
                          'четыре региона, живому сервису не нужен)')
@@ -553,6 +583,13 @@ def main():
     params = {'city_sigma_km': cfg['distances']['city_sigma_km'],
               'center_sigma_km': cfg['distances']['center_sigma_km']}
 
+    codes = list(cfg['indicators'])
+    if args.indicator:
+        unknown = set(args.indicator) - set(codes)
+        if unknown:
+            sys.exit(f"нет в конфиге indicators: {', '.join(sorted(unknown))}")
+        codes = [c for c in codes if c in args.indicator]
+
     todo = cfg['regions']
     if args.region:
         todo = [r for r in todo if r['slug'] in args.region]
@@ -565,7 +602,7 @@ def main():
         grid, code_to_id = load_grid(engine, region_id, reg['grid'])
 
         regional_values = {}
-        for code in cfg['indicators']:
+        for code in codes:
             val = regional_value_lookup(cfg['rosstat_parquet'], reg['object_name'], code,
                                         cfg['year'], cfg['indicators'][code].get('subsection'))
             if val is None:

@@ -113,6 +113,61 @@ def distribute_value(grid_weights, regional_value):
     return regional_value * grid_weights / total
 
 
+def distribute_rate(grid_weights, regional_value, base_values):
+    """
+    Разносит УДЕЛЬНЫЙ показатель — ставку (на 1000/10000 человек, кв.м на
+    жителя, км дорог на 1000 кв.км).
+
+    Ставку нельзя делить между ячейками, как объём: она не аддитивна — сумма
+    коэффициентов рождаемости по ячейкам не равна коэффициенту по региону, а
+    ячейке при таком делении достаётся величина, которая не является ни
+    ставкой, ни числом людей. Сохраняется взвешенное СРЕДНЕЕ:
+
+        rate_i = rv * w_i / w_bar,   w_bar = sum(base_j*w_j) / sum(base_j)
+        =>  sum(base_i*rate_i) / sum(base_i) = rv
+
+    Отличие от distribute_value ровно в знаменателе: там sum(w), здесь
+    взвешенное среднее веса. Знак rv значения не имеет — естественная убыль
+    (-2.5 на 1000 чел.) разносится так же, как прирост.
+
+    Параметры:
+        grid_weights: итоговые веса после композиции (numpy array)
+        regional_value: официальная ставка по региону
+        base_values: знаменатель ставки по ячейкам — население (коэффициенты
+                     на 1000/10000 чел., кв.м на жителя) или площадь
+                     (плотность дорог). NaN трактуется как 0.
+
+    Возвращает:
+        numpy array ставок по ячейкам. Ячейка с base=0 ставку получает (ставка
+        определена везде), но в инвариант не входит — вес в среднем ей даёт
+        только знаменатель.
+    """
+    w = np.asarray(grid_weights, dtype=float)
+    base = np.nan_to_num(np.asarray(base_values, dtype=float), nan=0.0)
+    base_total = base.sum()
+    # Без знаменателя (нет населения/площади по ячейкам) взвешенное среднее
+    # сводится к обычному — инвариант остаётся определён, просто все ячейки
+    # входят в него одинаково.
+    w_bar = (base * w).sum() / base_total if base_total > 0 else w.mean()
+    if w_bar == 0:
+        return np.full(len(w), float(regional_value))
+    return regional_value * w / w_bar
+
+
+def check_mean_preservation(cell_values, base_values, regional_value, tolerance=1e-6):
+    """
+    Инвариант для ставки: взвешенное по base среднее по ячейкам = региональная
+    ставка (аналог check_sum_preservation для distribute_rate).
+    """
+    v = np.asarray(cell_values, dtype=float)
+    base = np.nan_to_num(np.asarray(base_values, dtype=float), nan=0.0)
+    base_total = base.sum()
+    actual = (base * v).sum() / base_total if base_total > 0 else v.mean()
+    diff = abs(actual - regional_value)
+    rel_diff = diff / abs(regional_value) if regional_value != 0 else diff
+    return bool(rel_diff < tolerance)
+
+
 def check_sum_preservation(cell_values, regional_value, tolerance=1e-6):
     """
     Проверяет инвариант: сумма значений по ячейкам = региональное значение.
@@ -431,5 +486,63 @@ COMPOSITION_DESCRIPTION = {
                         "подбора и визуальной проверки, не константы"
         }
     ],
-    "invariants": ["Сохранение суммы: sum(cells) = regional_value"]
+    "invariants": [
+        "Объёмные показатели: sum(cells) = regional_value (distribute_value)",
+        "Удельные (ставки): sum(base*cells)/sum(base) = regional_value "
+        "(distribute_rate) — ставка не аддитивна, сохраняется среднее",
+    ]
 }
+
+
+def _selftest():
+    """Проверка инвариантов разнесения без данных и БД:
+        python -m src.masks.composition
+    (конвенция repo — `--selftest` у scripts/scrape_nauka_nso.py)."""
+    from src.masks import metrics
+
+    rng = np.random.default_rng(0)
+    w = rng.random(500)
+    pop = rng.integers(0, 5000, 500).astype(float)
+
+    # 1. Объёмный показатель: сохраняется сумма (поведение не изменилось)
+    vals = distribute_value(w, 94.0)
+    assert check_sum_preservation(vals, 94.0), vals.sum()
+
+    # 2. Ставка: сохраняется взвешенное по населению среднее — при любом знаке
+    for rv in (94.0, -2.5, 3.4, -0.0001):
+        r = distribute_rate(w, rv, pop)
+        wm = (pop * r).sum() / pop.sum()
+        assert abs(wm - rv) < 1e-9 * max(1.0, abs(rv)), (rv, wm)
+        assert check_mean_preservation(r, pop, rv), rv
+        # сумма ставок к rv отношения не имеет — на этом и ломалось прежнее
+        # разнесение; проверяем, что мы её и не сохраняем
+        assert abs(r.sum() - rv) > 0.5 * abs(rv), rv
+
+    # 3. Знак не меняет геометрию: где вес больше — там ставка дальше от нуля
+    #    в ту же сторону, что и региональная (убыль сильнее средней)
+    neg = distribute_rate(w, -2.5, pop)
+    assert neg[w.argmax()] == neg.min(), "самый тяжёлый вес -> самая сильная убыль"
+    assert (neg < 0).all()
+    # LQ = value/rv положителен и монотонен по весу — на этом стоит шкала фронта
+    lq = neg / -2.5
+    assert lq[w.argmax()] == lq.max() and (lq > 0).all()
+
+    # 4. Нет знаменателя по ячейкам -> вырождается в обычное среднее
+    zero = distribute_rate(w, -2.5, np.zeros_like(pop))
+    assert abs(zero.mean() - (-2.5)) < 1e-9, zero.mean()
+    assert check_mean_preservation(zero, np.zeros_like(pop), -2.5)
+
+    # 5. Почему метрики концентрации считаются по рельефу (composed), а не по
+    #    значениям: они инвариантны к положительному масштабу (у объёмного
+    #    показателя это те же числа), но у ставки с rv<0 знак переворачивается.
+    g_w = metrics.gini(w)
+    assert abs(metrics.gini(distribute_value(w, 94.0)) - g_w) < 1e-12
+    assert metrics.gini(distribute_rate(w, -2.5, pop)) < 0 < g_w
+    assert abs(metrics.top_share(distribute_value(w, 94.0), 0.1)
+               - metrics.top_share(w, 0.1)) < 1e-12
+
+    print("composition selftest: ok")
+
+
+if __name__ == "__main__":
+    _selftest()
