@@ -173,6 +173,26 @@ indicators:
     unit: "млн руб."
     indicator_type: industrial
 
+# Показатели из CSV в data/raw/ (нет Y-кода в паркете — данные из fedstat/Trudvsem/
+# opendata). Псевдо-код с префиксом C (CSV): C4770XXXX — первые 4 цифры код блока
+# по ТЗ (ЧК, ИНВ, ИНФ, СР, БИЗ, НР → 1, 2, 5, 6, 3, 4 → C4771XXXX и т.д.).
+# formula/source — для колонок J и K в таблице показателей.
+csv_indicators:
+  C4771001014:  # ЧК14
+    name: "Кадровая потребность по видам экономической деятельности"
+    unit: "вакансий"
+    indicator_type: general
+    csv_path: "data/raw/hh_vacancies_by_region.csv"
+    formula: "Число открытых вакансий по ОКВЭД C+J+M / 1000 занятых"
+    source: "Trudvsem opendata: https://opendata.trudvsem.ru/csv/vacancy.csv"
+  C4771001023:  # ЧК23
+    name: "Доля исследователей в возрасте до 39 лет"
+    unit: "%"
+    indicator_type: general
+    csv_path: "data/raw/young_researchers_by_region.csv"
+    formula: "Численность исследователей до 39 лет / Общая численность исследователей * 100"
+    source: "Раздел «Наука» Росстата: https://rosstat.gov.ru/statistics/science"
+
 # Итоговая композиция (как у Полины) + конфигурации ablation (§9.5 ТЗ).
 final_weights:
   regression: 0.5

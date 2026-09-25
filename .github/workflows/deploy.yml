@@ -31,7 +31,7 @@ jobs:
             context: db
             dockerfile: db/Dockerfile
           - name: api
-            context: apps/api
+            context: .
             dockerfile: apps/api/Dockerfile
           - name: web
             context: apps/web
