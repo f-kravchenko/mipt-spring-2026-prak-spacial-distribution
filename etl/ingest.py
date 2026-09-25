@@ -625,6 +625,7 @@ def main():
     engine = create_engine(args.database_url)
 
     csv_indicators = cfg.get('csv_indicators', {}) or {}
+    parquet_codes = set(cfg['indicators'].keys())
     load_indicators(engine, cfg['indicators'], cfg['rosstat_parquet'], cfg['year'],
                     csv_indicators=csv_indicators)
     if args.indicators_only:
@@ -632,6 +633,11 @@ def main():
         print(f"справочник показателей обновлён ({n_total}: "
               f"{len(cfg['indicators'])} из паркета + {len(csv_indicators)} CSV), выход")
         return
+    # Сливаем CSV-показатели в основной словарь: load_compositions и load_mask_values
+    # обращаются к cfg['indicators'][code] за метой (elasticity, r2, rate_base).
+    # У CSV-показателей эти поля отсутствуют (это general, без калибровки), .get()
+    # вернёт None, что для general-показателей корректно.
+    cfg['indicators'] = {**cfg['indicators'], **csv_indicators}
     slug_to_id = register_masks(engine)
     params = {'city_sigma_km': cfg['distances']['city_sigma_km'],
               'center_sigma_km': cfg['distances']['center_sigma_km']}
@@ -656,6 +662,9 @@ def main():
 
         regional_values = {}
         for code in codes:
+            if code not in parquet_codes:
+                # CSV-показатель обработается ниже отдельным циклом
+                continue
             val = regional_value_lookup(cfg['rosstat_parquet'], reg['object_name'], code,
                                         cfg['year'], cfg['indicators'][code].get('subsection'))
             if val is None:
@@ -667,6 +676,8 @@ def main():
             regional_values[code] = val
         # CSV-показатели (нет в паркете): читаем из CSV с fuzzy-мэтчем имён.
         for code, meta in csv_indicators.items():
+            if args.indicator and code not in args.indicator:
+                continue
             csv_path = meta.get('csv_path')
             if not csv_path or not os.path.exists(csv_path):
                 print(f"  {code}: CSV {csv_path} не найден — пропуск")
