@@ -119,7 +119,8 @@ def register_masks(engine):
     return slug_to_id
 
 
-def load_indicators(engine, indicators, parquet_path=None, year=None):
+def load_indicators(engine, indicators, parquet_path=None, year=None,
+                    csv_indicators=None):
     # national_total — итог по РФ (object_level='Страна' в том же parquet, та же
     # единица измерения, что у региональных строк) — для режима "Россия" на
     # фронте: доля ячейки = cell_abs / national_total, где cell_abs получен
@@ -146,6 +147,20 @@ def load_indicators(engine, indicators, parquet_path=None, year=None):
                 'itype': meta.get('indicator_type'), 'national': national,
                 # знаменатель ставки; None -> объёмный показатель (Σ = rv)
                 'rate_base': meta.get('rate_base'),
+            })
+        # CSV-показатели: national_total пока None (можно посчитать как сумму
+        # или отдельно из fedstat, но для карты по 4 пилотам это не критично).
+        for code, meta in (csv_indicators or {}).items():
+            conn.execute(text("""
+                INSERT INTO indicator (code, name, unit, elasticity, r2, indicator_type,
+                                       national_total)
+                VALUES (:code, :name, :unit, NULL, NULL, :itype, NULL)
+                ON CONFLICT (code) DO UPDATE SET
+                    name=EXCLUDED.name, unit=EXCLUDED.unit,
+                    indicator_type=EXCLUDED.indicator_type
+            """), {
+                'code': code, 'name': meta['name'], 'unit': meta.get('unit'),
+                'itype': meta.get('indicator_type', 'general'),
             })
 
 
@@ -502,6 +517,40 @@ def composition_run(grid, regional_value, code, conf, params, rate_base=None):
 MISSING_SENTINELS = (-77777777.0, -99999999.0)
 
 
+def _normalize_region(name):
+    """Нормализация имени региона: убирает 'республика', пунктуацию, регистр.
+    Нужна потому что fedstat/Trudvsem и Росстат пишут имена по-разному
+    ('Саха (Якутия) республика' vs 'Республика Саха (Якутия)')."""
+    s = str(name).lower()
+    for w in ('республика', 'область', 'край', 'автономный округ',
+             'автономная область', ' - ', 'г '):
+        s = s.replace(w, ' ')
+    for ch in '.,()-':
+        s = s.replace(ch, ' ')
+    return ' '.join(s.split())
+
+
+def csv_indicator_lookup(csv_path, object_name):
+    """Читает CSV `region,value` и возвращает значение для региона с fuzzy-мэтчем
+    имени. Возвращает None если регион не найден или value некорректно."""
+    df = pd.read_csv(csv_path)
+    if 'region' not in df.columns or 'value' not in df.columns:
+        raise ValueError(f"{csv_path}: ожидаются колонки region,value")
+    target = _normalize_region(object_name)
+    df['_norm'] = df['region'].map(_normalize_region)
+    hit = df[df['_norm'] == target]
+    if hit.empty:
+        # частичное совпадение по подстроке (например 'саха' попадёт в 'саха якутия')
+        key = target.split()[-1] if target else ''
+        hit = df[df['_norm'].str.contains(key, regex=False)] if key else hit
+    if hit.empty:
+        return None
+    try:
+        return float(hit['value'].values[0])
+    except (TypeError, ValueError):
+        return None
+
+
 def regional_value_lookup(parquet_path, object_name, code, year,
                           subsection=None, object_level='Регион'):
     # Predicate/column pushdown: читаем только подходящие строки, а не весь
@@ -575,9 +624,13 @@ def main():
     cfg = yaml.safe_load(open(args.config, encoding='utf-8'))
     engine = create_engine(args.database_url)
 
-    load_indicators(engine, cfg['indicators'], cfg['rosstat_parquet'], cfg['year'])
+    csv_indicators = cfg.get('csv_indicators', {}) or {}
+    load_indicators(engine, cfg['indicators'], cfg['rosstat_parquet'], cfg['year'],
+                    csv_indicators=csv_indicators)
     if args.indicators_only:
-        print(f"справочник показателей обновлён ({len(cfg['indicators'])}), выход")
+        n_total = len(cfg['indicators']) + len(csv_indicators)
+        print(f"справочник показателей обновлён ({n_total}: "
+              f"{len(cfg['indicators'])} из паркета + {len(csv_indicators)} CSV), выход")
         return
     slug_to_id = register_masks(engine)
     params = {'city_sigma_km': cfg['distances']['city_sigma_km'],
@@ -611,6 +664,17 @@ def main():
             # страховка на будущее: сентинел в regional_value портит весь регион,
             # а не один слой (см. MISSING_SENTINELS) — лучше упасть, чем залить
             assert val > -1e6, f"{code}/{reg['object_name']}: сентинел {val} прошёл фильтр"
+            regional_values[code] = val
+        # CSV-показатели (нет в паркете): читаем из CSV с fuzzy-мэтчем имён.
+        for code, meta in csv_indicators.items():
+            csv_path = meta.get('csv_path')
+            if not csv_path or not os.path.exists(csv_path):
+                print(f"  {code}: CSV {csv_path} не найден — пропуск")
+                continue
+            val = csv_indicator_lookup(csv_path, reg['object_name'])
+            if val is None:
+                print(f"  нет значения {code} для {reg['object_name']} в {csv_path} — пропуск")
+                continue
             regional_values[code] = val
 
         load_mask_values(engine, grid, code_to_id, slug_to_id, list(regional_values), params)
