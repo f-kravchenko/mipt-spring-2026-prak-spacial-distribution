@@ -148,19 +148,27 @@ def load_indicators(engine, indicators, parquet_path=None, year=None,
                 # знаменатель ставки; None -> объёмный показатель (Σ = rv)
                 'rate_base': meta.get('rate_base'),
             })
-        # CSV-показатели: national_total пока None (можно посчитать как сумму
-        # или отдельно из fedstat, но для карты по 4 пилотам это не критично).
+        # CSV-показатели: national_total — строка «Российская Федерация» в CSV,
+        # если она есть (у ставки это база шкалы режима «Россия», без неё
+        # /api/global-scale отдаёт 404). rate_base пишем и сюда: композиции
+        # берут его из конфига, а API — из этой таблицы, они должны совпадать.
         for code, meta in (csv_indicators or {}).items():
+            path = meta.get('csv_path')
+            national = (csv_indicator_lookup(path, 'Российская Федерация')
+                        if path and os.path.exists(path) else None)
             conn.execute(text("""
                 INSERT INTO indicator (code, name, unit, elasticity, r2, indicator_type,
-                                       national_total)
-                VALUES (:code, :name, :unit, NULL, NULL, :itype, NULL)
+                                       national_total, rate_base)
+                VALUES (:code, :name, :unit, NULL, NULL, :itype, :national, :rate_base)
                 ON CONFLICT (code) DO UPDATE SET
                     name=EXCLUDED.name, unit=EXCLUDED.unit,
-                    indicator_type=EXCLUDED.indicator_type
+                    indicator_type=EXCLUDED.indicator_type,
+                    national_total=EXCLUDED.national_total,
+                    rate_base=EXCLUDED.rate_base
             """), {
                 'code': code, 'name': meta['name'], 'unit': meta.get('unit'),
                 'itype': meta.get('indicator_type', 'general'),
+                'national': national, 'rate_base': meta.get('rate_base'),
             })
 
 

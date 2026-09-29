@@ -192,6 +192,26 @@ csv_indicators:
     csv_path: "data/raw/young_researchers_by_region.csv"
     formula: "Численность исследователей до 39 лет / Общая численность исследователей * 100"
     source: "Раздел «Наука» Росстата: https://rosstat.gov.ru/statistics/science"
+  # ЧК22/ЧК24 собирает scripts/build_researchers_csv.py. Это ставки: rate_base
+  # сохраняет взвешенное среднее вместо суммы. Настоящий знаменатель — число
+  # исследователей, но по ячейкам его нет; ближайшая база на сетке — население.
+  # Строка «Российская Федерация» в CSV -> national_total (шкала режима «Россия»).
+  C4771001022:  # ЧК22
+    name: "Удельный вес исследователей с учёной степенью кандидата или доктора наук"
+    unit: "%"
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/researchers_degree_share_by_region.csv"
+    formula: "(Исследователи-доктора наук + кандидаты наук) / Общая численность исследователей * 100"
+    source: "Росстат (форма 2-наука), parquet: Y477110454 / Y477110473"
+  C4771001024:  # ЧК24 (= ЧК241; ЧК242 «из других субъектов РФ» — только ведомственный запрос)
+    name: "Коэффициент обновления исследователей"
+    unit: "на 1000 исследователей"
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/researchers_renewal_per_1k_by_region.csv"
+    formula: "Принято исследователей за год / Численность исследователей на конец года * 1000"
+    source: "Форма 2-наука, табл. 4а_2 по ОКАТО: https://rosstat.gov.ru/storage/mediabank/2-nauka_2023.rar"
 
 # Итоговая композиция (как у Полины) + конфигурации ablation (§9.5 ТЗ).
 final_weights:
