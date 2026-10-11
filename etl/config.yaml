@@ -181,6 +181,13 @@ indicators:
     unit: "%"
     indicator_type: general
     rate_base: population
+  # СР73 — обеспеченность больничными койками (на 10000 чел.). Ставка, rate_base
+  # на население. В паркете есть, грузится напрямую.
+  Y477110209:
+    name: "Число больничных коек на 10000 человек"
+    unit: "коек на 10000"
+    indicator_type: general
+    rate_base: population
 
 # Показатели из CSV в data/raw/ (нет Y-кода в паркете — данные из fedstat/Trudvsem/
 # opendata). Псевдо-код с префиксом C (CSV): C4770XXXX — первые 4 цифры код блока
@@ -230,6 +237,23 @@ csv_indicators:
     csv_path: "data/raw/vtno_investments_by_region.csv"
     formula: "Инвестиции в основной капитал по ОКВЭД C+J+M (из паркета Y477050016 с агрегацией по ВЭД)"
     source: "Сборник «Регионы России»: https://rosstat.gov.ru/folder/210/document/13204"
+  # СР34, СР35 — счётчики объектов транспортной инфраструктуры по региону.
+  # Это объёмы (штуки), не ставки — rate_base не указан. По Якутии ЖД-станций
+  # Wikidata не нашла, в CSV её нет — показатель просто пропустится для региона.
+  C4771006034:  # СР34
+    name: "Доступность железнодорожных станций"
+    unit: "станций"
+    indicator_type: general
+    csv_path: "data/raw/rail_stations_by_region.csv"
+    formula: "Число железнодорожных станций (usage=main) в регионе из OSM/Wikidata"
+    source: "Wikidata SPARQL: https://query.wikidata.org, OpenStreetMap: https://www.openstreetmap.org"
+  C4771006035:  # СР35
+    name: "Доступность аэропортов"
+    unit: "аэропортов"
+    indicator_type: general
+    csv_path: "data/raw/airports_by_region.csv"
+    formula: "Число крупных пассажирских аэропортов в регионе"
+    source: "OurAirports: https://ourairports.com/data"
 
 # Итоговая композиция (как у Полины) + конфигурации ablation (§9.5 ТЗ).
 final_weights:
