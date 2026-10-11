@@ -258,6 +258,24 @@ indicators:
     name: "Численность профессорско-преподавательского персонала вузов"
     unit: "человек"
     indicator_type: general
+  # Уровень безработицы (%). Ставка.
+  Y477100008:
+    name: "Уровень безработицы населения"
+    unit: "%"
+    indicator_type: general
+    rate_base: population
+  # Уровень занятости (%). Ставка.
+  Y477100010:
+    name: "Уровень занятости населения"
+    unit: "%"
+    indicator_type: general
+    rate_base: population
+  # Энергоёмкость ВРП. Берём «В текущих ценах» (есть ещё «В постоянных ценах 2016»).
+  Y477090017:
+    name: "Энергоёмкость ВРП"
+    unit: "кг у.т. на 10 тыс. руб."
+    subsection: "В текущих ценах"
+    indicator_type: general
 
 # Показатели из CSV в data/raw/ (нет Y-кода в паркете — данные из fedstat/Trudvsem/
 # opendata). Псевдо-код с префиксом C (CSV): C4770XXXX — первые 4 цифры код блока
