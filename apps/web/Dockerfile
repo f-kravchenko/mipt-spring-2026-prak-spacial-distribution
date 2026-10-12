@@ -6,6 +6,9 @@ COPY . .
 # API/тайлы доступны на хосте; для прода переопределить через build-arg.
 ARG VITE_API_BASE=http://localhost:8000
 ENV VITE_API_BASE=$VITE_API_BASE
+# Коммит сборки — показывается внизу панели.
+ARG GIT_SHA=dev
+ENV VITE_GIT_SHA=$GIT_SHA
 RUN npm run build
 
 FROM nginx:alpine

@@ -54,6 +54,7 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           push: ${{ github.event_name == 'push' }}
+          build-args: GIT_SHA=${{ github.sha }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.OWNER }}/spatial-masks-${{ matrix.name }}:latest
             ${{ env.REGISTRY }}/${{ env.OWNER }}/spatial-masks-${{ matrix.name }}:${{ github.sha }}

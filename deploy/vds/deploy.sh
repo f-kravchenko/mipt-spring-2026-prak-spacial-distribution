@@ -11,6 +11,7 @@ fi
 
 echo "Updating repository..."
 git pull --ff-only
+export GIT_SHA="$(git rev-parse HEAD)"
 
 echo "Building and starting database..."
 docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build db

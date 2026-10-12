@@ -1602,6 +1602,11 @@ export default function App() {
               </div>
             </details>
             </>}
+            {/* Коммит, из которого собран фронт (build-arg GIT_SHA в apps/web/Dockerfile) */}
+            <div title={import.meta.env.VITE_GIT_SHA}
+              style={{ marginTop: 16, fontSize: 10.5, color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
+              build {(import.meta.env.VITE_GIT_SHA || "dev").slice(0, 7)}
+            </div>
           </div>
         )}
       </div>

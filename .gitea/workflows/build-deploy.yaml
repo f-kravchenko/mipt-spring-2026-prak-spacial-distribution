@@ -47,6 +47,7 @@ jobs:
           docker build \
             -t $BUILD_REGISTRY/spatial-masks-web:${{ github.sha }} \
             -t $BUILD_REGISTRY/spatial-masks-web:latest \
+            --build-arg GIT_SHA=${{ github.sha }} \
             -f apps/web/Dockerfile \
             apps/web/
 

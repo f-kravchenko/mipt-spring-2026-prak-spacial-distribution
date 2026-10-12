@@ -68,7 +68,10 @@ services:
       - "8000"
 
   web:
-    build: ./apps/web
+    build:
+      context: ./apps/web
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
     restart: unless-stopped
     depends_on:
       - api
