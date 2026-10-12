@@ -7,7 +7,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  OWNER: f-kravchenko
+  OWNER: ${{ github.repository_owner }}
 
 jobs:
   helm:
@@ -27,9 +27,6 @@ jobs:
     strategy:
       matrix:
         include:
-          - name: db
-            context: db
-            dockerfile: db/Dockerfile
           - name: api
             context: .
             dockerfile: apps/api/Dockerfile

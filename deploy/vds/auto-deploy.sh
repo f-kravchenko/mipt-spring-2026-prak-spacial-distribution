@@ -15,8 +15,9 @@ flock -n 9 || exit 0
 git fetch --quiet origin "$BRANCH"
 local_rev="$(git rev-parse HEAD)"
 remote_rev="$(git rev-parse "origin/$BRANCH")"
+deployed_rev="$(cat "$(git rev-parse --git-path last-successful-deploy)" 2>/dev/null || true)"
 
-if [[ "$local_rev" == "$remote_rev" ]]; then
+if [[ "$local_rev" == "$remote_rev" && "$deployed_rev" == "$local_rev" ]]; then
   exit 0
 fi
 
