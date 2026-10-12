@@ -59,7 +59,7 @@ const MAIN_STYLE = {
   sources: {
     "carto-basemap": {
       type: "raster",
-      tiles: ["https://basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}@2x.png"],
+      tiles: ["https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key=cb1_4hmu_1_f3cdd1b210a74bf343989e1b"],
       tileSize: 256,
       maxzoom: 20,
       attribution:
