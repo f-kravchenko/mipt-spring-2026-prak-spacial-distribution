@@ -259,6 +259,35 @@ indicators:
     name: "Капитальные затраты на научные исследования и разработки"
     unit: "млн руб."
     indicator_type: industrial
+  # Показатели, восстановленные после случайного форспуша 2026-10-11.
+  Y477110441:
+    name: "Численность врачей всех специальностей на 10000 человек населения"
+    unit: "на 10000"
+    indicator_type: general
+    rate_base: population
+  Y477110307:
+    name: "Выдано патентов на изобретения"
+    unit: "единиц"
+    indicator_type: general
+  Y477110476:
+    name: "Численность профессорско-преподавательского персонала вузов"
+    unit: "человек"
+    indicator_type: general
+  Y477100008:
+    name: "Уровень безработицы населения"
+    unit: "%"
+    indicator_type: general
+    rate_base: population
+  Y477100010:
+    name: "Уровень занятости населения"
+    unit: "%"
+    indicator_type: general
+    rate_base: population
+  Y477090017:
+    name: "Энергоёмкость ВРП"
+    unit: "кг у.т. на 10 тыс. руб."
+    subsection: "В текущих ценах"
+    indicator_type: general
 
 # Показатели из CSV в data/raw/ (нет Y-кода в паркете — данные из fedstat/Trudvsem/
 # opendata). Псевдо-код с префиксом C (CSV): C4770XXXX — первые 4 цифры код блока
