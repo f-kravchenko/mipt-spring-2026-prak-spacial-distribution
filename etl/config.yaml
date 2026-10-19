@@ -288,6 +288,13 @@ indicators:
     unit: "кг у.т. на 10 тыс. руб."
     subsection: "В текущих ценах"
     indicator_type: general
+  # ИНФ16 — степень износа основных фондов. Ставка (%): настоящий знаменатель —
+  # стоимость ОФ, по ячейкам её нет; ближайшая база на сетке — население.
+  Y477110390:
+    name: "Степень износа основных фондов на конец года"
+    unit: "%"
+    indicator_type: general
+    rate_base: population
 
 # Показатели из CSV в data/raw/ (нет Y-кода в паркете — данные из fedstat/Trudvsem/
 # opendata). Псевдо-код с префиксом C (CSV): C4770XXXX — первые 4 цифры код блока
@@ -389,6 +396,42 @@ csv_indicators:
     csv_path: "data/raw/waste_utilization_by_region.csv"
     formula: "Утилизированные и обезвреженные отходы / Численность населения"
     source: "Сборник «Регионы России»: https://rosstat.gov.ru/folder/210/document/13204"
+  # Блок 5 ТЗ — инфраструктура (ИНФ12–ИНФ18). ИНФ12/ИНФ13 собирают скрипты
+  # scripts/build_universities_csv.py (Wikidata + паркет) и build_ckp_csv.py
+  # (ckp-rf.ru + перечень ПИШ), ИНФ15 — build_fixed_assets_csv.py, ИНФ18 — CSV,
+  # собранный вручную. ИНФ14 и ИНФ17 — открытых данных нет.
+  C4771005012:  # ИНФ12
+    name: "Число организаций высшего образования на 100 тыс. жителей"
+    unit: "на 100 тыс."
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/universities_per_100k_by_region.csv"
+    formula: "Число вузов (Wikidata, головные организации) / Численность населения * 100 000"
+    source: "Wikidata SPARQL: https://query.wikidata.org; население — паркет Y477110373"
+  # ИНФ13 — счётчик объектов (объём), не ставка: rate_base не указан.
+  C4771005013:  # ИНФ13
+    name: "Объекты научно-технологической инфраструктуры (ЦКП, УНУ, ПИШ)"
+    unit: "объектов"
+    indicator_type: general
+    csv_path: "data/raw/nti_objects_by_region.csv"
+    formula: "Число ЦКП + УНУ (ckp-rf.ru) + передовых инженерных школ по региону; лаборатории без реестра не входят"
+    source: "ckp-rf.ru: https://ckp-rf.ru/catalog/; ПИШ — отборы Минобрнауки 2022/2023"
+  C4771005015:  # ИНФ15
+    name: "Коэффициент обновления основных фондов"
+    unit: "%"
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/fixed_assets_renewal_by_region.csv"
+    formula: "Ввод в действие основных фондов / Наличие основных фондов на конец года * 100"
+    source: "Росстат (паркет): Y477110029 / Y477110391"
+  C4771005018:  # ИНФ18
+    name: "Удельный вес машин и оборудования в возрасте до 5 лет"
+    unit: "%"
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/tech_under_5_years_by_region.csv"
+    formula: "Стоимость машин и оборудования до 5 лет / Общая стоимость машин и оборудования * 100"
+    source: "Раздел «Наука» Росстата: https://rosstat.gov.ru/statistics/science"
 
 # Итоговая композиция (как у Полины) + конфигурации ablation (§9.5 ТЗ).
 final_weights:

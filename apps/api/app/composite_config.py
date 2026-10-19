@@ -127,6 +127,35 @@ COMPOSITE = {
         "masks": {"road_network_mask": 0.50, "road_traveltime_mask": 0.25,
                   "worldpop_mask": 0.15, "distance_to_city_mask": 0.10},
     },
+    # Блок 5 ТЗ — инфраструктура (ИНФ12–ИНФ18)
+    "Y477110390": {  # ИНФ16 — степень износа основных фондов (обратный)
+        "direction": "inverse", "indicator_weight": 0.05,
+        "masks": {"territory_type_mask": 0.30, "road_network_mask": 0.20,
+                  "power_lines_mask": 0.20, "worldpop_mask": 0.15,
+                  "distance_to_city_mask": 0.15},
+    },
+    "C4771005012": {  # ИНФ12 — вузы на 100 тыс. жителей
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"science_mask": 0.35, "worldpop_mask": 0.30,
+                  "distance_to_city_mask": 0.20, "territory_type_mask": 0.15},
+    },
+    "C4771005013": {  # ИНФ13 — объекты НТИ (ЦКП, УНУ, ПИШ)
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"science_mask": 0.50, "worldpop_mask": 0.25,
+                  "distance_to_center_mask": 0.15, "territory_type_mask": 0.10},
+    },
+    "C4771005015": {  # ИНФ15 — коэффициент обновления основных фондов
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"territory_type_mask": 0.30, "road_network_mask": 0.20,
+                  "power_lines_mask": 0.20, "worldpop_mask": 0.15,
+                  "distance_to_city_mask": 0.15},
+    },
+    "C4771005018": {  # ИНФ18 — оборудование до 5 лет
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"science_mask": 0.40, "territory_type_mask": 0.20,
+                  "power_lines_mask": 0.15, "worldpop_mask": 0.15,
+                  "distance_to_city_mask": 0.10},
+    },
 }
 
 COMPOSITE_NAME = "Комплексная оценка (результирующий слой)"
