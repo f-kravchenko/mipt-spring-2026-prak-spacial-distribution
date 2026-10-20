@@ -187,6 +187,12 @@ indicators:
     unit: "коек на 10000"
     indicator_type: general
     rate_base: population
+  # СР22 — ввод жилья (ОШИБКИ, задача 5): кв. м на 1000 человек. Ставка.
+  Y477110017:
+    name: "Ввод в действие жилых домов на 1000 человек населения"
+    unit: "кв. м на 1000 чел"
+    indicator_type: general
+    rate_base: population
   # СР42 — загрязнённость водных объектов. УКИЗВ (Росгидромет) в открытом
   # массиве нет; ближайший показатель — сброс загрязнённых сточных вод в
   # поверхностные водные объекты (млн м3). Обратный показатель.
@@ -280,6 +286,8 @@ csv_indicators:
     name: "Доля исследователей в возрасте до 39 лет"
     unit: "%"
     indicator_type: general
+    # Доля, а не объём (ОШИБКИ, задача 15): rate_base сохраняет среднее, а не сумму.
+    rate_base: population
     csv_path: "data/raw/young_researchers_by_region.csv"
     formula: "Численность исследователей до 39 лет / Общая численность исследователей * 100"
     source: "Раздел «Наука» Росстата: https://rosstat.gov.ru/statistics/science"
@@ -371,6 +379,40 @@ csv_indicators:
     rate_base: population
     csv_path: "data/raw/sport_grounds_per_100k_by_region.csv"
     formula: "Плоскостные спортивные сооружения (Y477110501) / Численность населения * 100 000"
+    source: "Росстат, «Регионы России»: https://rosstat.gov.ru/folder/210/document/13204"
+  # ЧК21, ИНВ13, НР11, НР21 — замена неверных кодов (ОШИБКИ, задачи 2, 3, 4, 7).
+  # CSV собирает тот же scripts/build_per_capita_csv.py.
+  C4771001021:  # ЧК21
+    name: "Персонал, занятый научными исследованиями и разработками, на 10 тыс. жителей"
+    unit: "чел. на 10 тыс."
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/rd_personnel_per_10k_by_region.csv"
+    formula: "Численность персонала НИР, все категории (Y477110471) / Численность населения * 10 000"
+    source: "Росстат, «Регионы России»: https://rosstat.gov.ru/folder/210/document/13204"
+  C4771002013:  # ИНВ13
+    name: "Внутренние затраты на научные исследования и разработки на 1000 жителей"
+    unit: "тыс. руб. на 1000 чел"
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/rd_expenditure_per_1k_by_region.csv"
+    formula: "Внутренние затраты на ИиР (Y477110039) / Численность населения * 1000"
+    source: "Росстат, «Регионы России»: https://rosstat.gov.ru/folder/210/document/13204"
+  C4771003011:  # НР11
+    name: "Коэффициент изобретательской активности (патентные заявки на 10 тыс. жителей)"
+    unit: "заявок на 10 тыс."
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/patent_applications_per_10k_by_region.csv"
+    formula: "Подано патентных заявок на изобретения (Y477110309) / Численность населения * 10 000"
+    source: "Росстат, «Регионы России»: https://rosstat.gov.ru/folder/210/document/13204"
+  C4771003021:  # НР21
+    name: "Удельный вес инновационных товаров в общем объёме отгрузки"
+    unit: "%"
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/innovative_goods_share_by_region.csv"
+    formula: "Объём инновационных товаров (Y477110236) / Отгрузка по 4 разделам ОКВЭД (Y477090007) * 100"
     source: "Росстат, «Регионы России»: https://rosstat.gov.ru/folder/210/document/13204"
   # Блок 5 ТЗ — инфраструктура (ИНФ12–ИНФ18). ИНФ12/ИНФ13 собирают скрипты
   # scripts/build_universities_csv.py (Wikidata + паркет) и build_ckp_csv.py
