@@ -187,6 +187,13 @@ indicators:
     unit: "коек на 10000"
     indicator_type: general
     rate_base: population
+  # НР21 (ОШИБКИ, задача 4): официальный удельный вес инновационных товаров
+  # в общем объёме отгруженных товаров, %. Ставка.
+  Y477110235:
+    name: "Удельный вес инновационных товаров, работ, услуг в общем объёме отгруженных"
+    unit: "%"
+    indicator_type: general
+    rate_base: population
   # СР22 — ввод жилья (ОШИБКИ, задача 5): кв. м на 1000 человек. Ставка.
   Y477110017:
     name: "Ввод в действие жилых домов на 1000 человек населения"
@@ -314,11 +321,12 @@ csv_indicators:
   # ИНВ11 — инвестиции в основной капитал ВТНО. Объём (млн руб.), не ставка,
   # поэтому rate_base не указан — разносится как сумма по маскам.
   C4771002011:  # ИНВ11
-    name: "Инвестиции в основной капитал ВТНО"
-    unit: "млн руб."
+    name: "Инвестиции в основной капитал ВТНО на 1000 жителей"
+    unit: "тыс. руб. на 1000 чел"
     indicator_type: general
-    csv_path: "data/raw/vtno_investments_by_region.csv"
-    formula: "Инвестиции в основной капитал по ОКВЭД C+J+M (из паркета Y477050016 с агрегацией по ВЭД)"
+    rate_base: population
+    csv_path: "data/raw/vtno_investments_per_1k_by_region.csv"
+    formula: "Инвестиции в основной капитал по ОКВЭД C+J+M (Y477050016) / Численность населения * 1000"
     source: "Сборник «Регионы России»: https://rosstat.gov.ru/folder/210/document/13204"
   # СР34, СР35 — счётчики объектов транспортной инфраструктуры по региону.
   # Это объёмы (штуки), не ставки — rate_base не указан. По Якутии ЖД-станций
@@ -382,6 +390,22 @@ csv_indicators:
     source: "Росстат, «Регионы России»: https://rosstat.gov.ru/folder/210/document/13204"
   # ЧК21, ИНВ13, НР11, НР21 — замена неверных кодов (ОШИБКИ, задачи 2, 3, 4, 7).
   # CSV собирает тот же scripts/build_per_capita_csv.py.
+  C4771002012:  # ИНВ12
+    name: "Инвестиции в обрабатывающие производства на 1000 жителей"
+    unit: "тыс. руб. на 1000 чел"
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/manufacturing_investment_per_1k_by_region.csv"
+    formula: "Инвестиции в основной капитал, обрабатывающие производства (Y477050016) / Численность населения * 1000"
+    source: "Росстат, «Регионы России»: https://rosstat.gov.ru/folder/210/document/13204"
+  C4771002031:  # ИНВ31
+    name: "Доходы консолидированного бюджета на 1000 жителей"
+    unit: "тыс. руб. на 1000 чел"
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/budget_revenue_per_1k_by_region.csv"
+    formula: "Доходы консолидированного бюджета субъекта (Y477110071) / Численность населения * 1000"
+    source: "Росстат, «Регионы России»: https://rosstat.gov.ru/folder/210/document/13204"
   C4771001021:  # ЧК21
     name: "Персонал, занятый научными исследованиями и разработками, на 10 тыс. жителей"
     unit: "чел. на 10 тыс."
@@ -405,14 +429,6 @@ csv_indicators:
     rate_base: population
     csv_path: "data/raw/patent_applications_per_10k_by_region.csv"
     formula: "Подано патентных заявок на изобретения (Y477110309) / Численность населения * 10 000"
-    source: "Росстат, «Регионы России»: https://rosstat.gov.ru/folder/210/document/13204"
-  C4771003021:  # НР21
-    name: "Удельный вес инновационных товаров в общем объёме отгрузки"
-    unit: "%"
-    indicator_type: general
-    rate_base: population
-    csv_path: "data/raw/innovative_goods_share_by_region.csv"
-    formula: "Объём инновационных товаров (Y477110236) / Отгрузка по 4 разделам ОКВЭД (Y477090007) * 100"
     source: "Росстат, «Регионы России»: https://rosstat.gov.ru/folder/210/document/13204"
   # Блок 5 ТЗ — инфраструктура (ИНФ12–ИНФ18). ИНФ12/ИНФ13 собирают скрипты
   # scripts/build_universities_csv.py (Wikidata + паркет) и build_ckp_csv.py
