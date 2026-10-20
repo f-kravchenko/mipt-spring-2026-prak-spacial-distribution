@@ -1,3 +1,4 @@
+import "./platform.css";
 import React from "react";
 import ReactDOM from "react-dom/client";
 // Шрифты бандлятся локально (@fontsource) — без CDN, работает офлайн.

@@ -5,15 +5,15 @@
    ============================================================ */
 
 :root {
-  --paper: #fbfaf6;            /* тёплая бумага панели */
-  --wash: #f1efe8;             /* лёгкая заливка (контракт, hover) */
-  --ink: #182338;              /* чернила — основной текст */
-  --muted: #75809b;
-  --hairline: #e4e1d6;         /* линейка на бумаге */
-  --accent: #0b3a75;           /* навигационный синий */
-  --accent-soft: #e8eef7;
-  --signal-ok: #167c3c;
-  --signal-bad: #b00020;
+  --paper: var(--rw-surface);            /* тёплая бумага панели */
+  --wash: var(--rw-page);             /* лёгкая заливка (контракт, hover) */
+  --ink: var(--rw-text);              /* чернила — основной текст */
+  --muted: var(--rw-muted);
+  --hairline: var(--rw-line);         /* линейка на бумаге */
+  --accent: var(--rw-primary);           /* навигационный синий */
+  --accent-soft: var(--rw-selected);
+  --signal-ok: var(--rw-positive);
+  --signal-bad: var(--rw-negative);
   --font-ui: "Golos Text", system-ui, -apple-system, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
 
@@ -428,3 +428,32 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--muted); b
 }
 .tip-row { cursor: help; }
 .tip-row:hover td { background: rgba(24, 35, 56, .05); }
+
+/* Shared Rutwin UI kit; analytical layers and scenario logic are unchanged. */
+.rw-legacy-header { margin-bottom: 10px; }
+.panel .rw-navigation { margin: 4px 0 12px; }
+.panel .rw-navigation a { flex: 1; padding-inline: 6px; }
+.panel { border-radius: 12px; }
+.product-mark { background: var(--rw-primary); border-radius: 8px; box-shadow: none; }
+.product-lab { margin: 0; font-size: 12px; line-height: 18px; color: var(--muted); }
+.panel .product-header h1 { white-space: normal; }
+:root:not([data-theme="dark"]) select { background: var(--rw-surface); border-color: var(--rw-input); border-radius: 8px; }
+:root:not([data-theme="dark"]) .context-card,
+:root:not([data-theme="dark"]) .workspace-tabs button.active { background: var(--rw-selected); color: var(--rw-link); }
+:root:not([data-theme="dark"]) .recompute-btn,
+:root:not([data-theme="dark"]) .scale-toggle button.on { background: var(--rw-primary); color: #fff; border-radius: 8px; }
+:root:not([data-theme="dark"]) .recompute-btn:hover { background: var(--rw-hover); }
+button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible { outline: 3px solid var(--rw-focus); outline-offset: 2px; }
+
+:root { color-scheme: light; }
+
+@media (max-width: 760px) {
+  .panel { width: min(340px, calc(100vw - 48px)); top: 8px; bottom: 8px; left: 8px; }
+  .panel.collapsed { width: 0; }
+  .panel-body { padding: 14px 12px; }
+  .panel-toggle { width: 44px; height: 44px; right: -36px; border-radius: 8px; }
+  .locator { display: none; }
+  .legend { right: 8px; max-width: calc(100vw - 64px); }
+  select, .recompute-btn, .scale-toggle button { min-height: 44px; font-size: 14px; }
+  .rw-brand-copy { font-size: 16px; }
+}

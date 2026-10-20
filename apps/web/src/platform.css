@@ -1,0 +1,40 @@
+/* Рутвин — Лаборатория территорий. Shared UI tokens; analytical scales live separately. */
+:root {
+  color-scheme: light dark;
+  --rw-primary: #1668e8;
+  --rw-hover: #1054c5;
+  --rw-link: light-dark(#1668e8, #94b8ff);
+  --rw-selected: light-dark(#eaf3ff, #203854);
+  --rw-page: light-dark(#f5f7fb, #101923);
+  --rw-surface: light-dark(#ffffff, #172332);
+  --rw-text: light-dark(#17263c, #e8eef7);
+  --rw-muted: light-dark(#596b82, #a8b6cb);
+  --rw-line: light-dark(#dce4ef, #34455c);
+  --rw-input: light-dark(#a8b7cb, #6c819d);
+  --rw-focus: #80b5ff;
+  --rw-positive: light-dark(#187145, #94d9b7);
+  --rw-positive-bg: light-dark(#eaf7f0, #243b30);
+  --rw-warning: light-dark(#805600, #ffd48e);
+  --rw-warning-bg: light-dark(#fff4dc, #3c3323);
+  --rw-negative: light-dark(#b12d3c, #ffaaaa);
+  --rw-negative-bg: light-dark(#fff0f0, #41272b);
+  --rw-radius-control: 8px;
+  --rw-radius-panel: 12px;
+}
+[data-theme="light"] { color-scheme: light; }
+[data-theme="dark"] { color-scheme: dark; }
+.rw-brand { display:inline-flex; align-items:center; gap:10px; color:var(--rw-text); text-decoration:none; flex-shrink:0; }
+.rw-brand:hover { text-decoration:none; }
+.rw-mark { display:grid; place-items:center; width:36px; height:36px; border-radius:8px; background:var(--rw-primary); color:#fff; font-size:20px; font-weight:600; }
+.rw-brand-copy { display:flex; flex-direction:column; gap:2px; font-size:18px; font-weight:600; line-height:1.2; }
+.rw-brand-copy small { font-size:12px; font-weight:400; letter-spacing:0; color:var(--rw-muted); }
+.rw-navigation { display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
+.rw-navigation a { display:inline-flex; align-items:center; justify-content:center; padding:8px 10px; min-height:40px; border-radius:8px; color:var(--rw-muted); font-size:13px; text-decoration:none; }
+.rw-navigation a:hover { color:var(--rw-link); background:var(--rw-selected); }
+.rw-navigation a[aria-current="page"] { color:var(--rw-link); background:var(--rw-selected); font-weight:500; }
+.rw-environment { display:inline-block; vertical-align:middle; margin-left:6px; padding:2px 6px; border:1px solid var(--rw-line); border-radius:5px; color:var(--rw-muted); background:var(--rw-page); font-size:11px; font-weight:400; letter-spacing:0; white-space:nowrap; }
+:where(a,button,input,select,textarea,summary):focus-visible { outline:3px solid var(--rw-focus); outline-offset:2px; }
+@media(max-width:760px) {
+  .rw-navigation a { min-height:44px; }
+  .rw-brand-copy { font-size:16px; }
+}

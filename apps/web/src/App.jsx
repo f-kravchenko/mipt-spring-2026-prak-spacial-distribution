@@ -1,3 +1,4 @@
+import { Brand, EnvironmentBadge, PlatformNavigation } from "./platform.jsx";
 import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import { fetchRegions, fetchIndicators, fetchMasks, fetchIndexConfig, fetchComposite, fetchDefaultWeights, fetchMaskPeaks, fetchConcentrationStructure, fetchGlobalScale, recompute } from "./api";
@@ -1246,7 +1247,8 @@ export default function App() {
 
         {!collapsed && (
           <div className="panel-body">
-            <h1>Пространственная дезагрегация</h1>
+            <header className="rw-legacy-header"><Brand /></header>
+            <PlatformNavigation current="map" />
             <div className="sub">
               {isIndex
                 ? "Индекс качества городской среды · города области"
