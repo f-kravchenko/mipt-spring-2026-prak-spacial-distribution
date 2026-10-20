@@ -56,10 +56,25 @@ OUTPUTS = [
     ("budget_revenue_per_1k_by_region.csv", "Y477110071", None, 1000),  # ИНВ31
 ]
 
+# Итог по РФ в паркете в других единицах, чем у регионов. Без строки РФ у ставки
+# нет national_total: режим «Россия» отдаёт 404, а 13.10 из-за этого падала
+# публикация (503). Y477110071: у РФ млрд руб. (22 325), у регионов млн руб.
+RF_UNIT_FIX = {"Y477110071": 1000}
+
 # Числитель из готового CSV (region,value в млн руб.), знаменатель — население.
 CSV_OUTPUTS = [
     ("vtno_investments_per_1k_by_region.csv", "vtno_investments_by_region.csv", 1000),  # ИНВ11
 ]
+
+# Для итога по РФ из суммы регионов: эти строки уже входят в «...(с автономным
+# округом)» / «...(с автономными округами)», иначе посчитаются дважды.
+NESTED_REGIONS = {
+    "Архангельская область (без автономного округа)",
+    "Ненецкий автономный округ",
+    "Тюменская область (без автономных округов)",
+    "Ханты-Мансийский автономный округ — Югра",
+    "Ямало-Ненецкий автономный округ",
+}
 
 # НР21 берётся напрямую из паркета: Y477110235 (официальный удельный вес, %).
 
@@ -86,6 +101,11 @@ def main():
         val = read(code, sub)
         if val.empty:
             raise SystemExit(f"{code} ({sub}): нет строк — проверь подраздел")
+        # У РФ бывает несколько строк за год в разных единицах (Y477110053:
+        # 16 952 тыс. т и 17 млн т) — берём все, write() выберет подходящую.
+        rf_val = val[val["object_level"] == "Страна"]
+        rf_val = rf_val[rf_val["year"] == rf_val["year"].max()]
+        val = val[val["object_level"] == "Регион"]
         val = val.sort_values(["object_name", "year"]).drop_duplicates("object_name", keep="last")
         rows = []
         for _, r in val.iterrows():
@@ -94,7 +114,14 @@ def main():
                 continue
             p_val = p.sort_values("year")["indicator_value"].iloc[-1]
             rows.append((r["object_name"], round(r["indicator_value"] / p_val * mult, 3)))
-        write(fname, rows)
+        rf_pop = pop[(pop["object_name"] == "Российская Федерация")
+                     & (pop["year"] <= rf_val["year"].max())].sort_values("year")
+        rf_candidates = []
+        if not rf_val.empty and not rf_pop.empty:
+            p_val = rf_pop["indicator_value"].iloc[-1]
+            rf_candidates = [round(v * RF_UNIT_FIX.get(code, 1) / p_val * mult, 3)
+                             for v in rf_val["indicator_value"]]
+        write(fname, rows, rf_candidates)
 
     latest_pop = pop.sort_values("year").drop_duplicates("object_name", keep="last")
     pop_by_name = dict(zip(latest_pop["object_name"], latest_pop["indicator_value"]))
@@ -110,16 +137,23 @@ def main():
                 for _, r in src_df.iterrows() if r["region"] in pop_by_name]
         if len(rows) < len(src_df):
             print(f"{src}: {len(src_df) - len(rows)} регионов без населения пропущено")
-        write(fname, rows)
+        # Строки РФ в исходном CSV нет: сумма регионов / население РФ. Регионы
+        # с сентинелом в сумму не входят, итог по РФ немного занижен.
+        total = src_df[~src_df["region"].isin(NESTED_REGIONS)]["value"].sum()
+        rf_pop = pop_by_name.get("Российская Федерация")
+        rf_candidates = [round(total / rf_pop * mult, 3)] if rf_pop else []
+        write(fname, rows, rf_candidates)
 
 
-def write(fname, rows):
-    # Итог по РФ в паркете иногда в других единицах (Y477110053: 0.116 кг/чел
-    # вместо ~116). Если РФ выпадает из диапазона регионов — строку РФ не пишем,
+def write(fname, rows, rf_candidates=()):
+    # Итог по РФ: первый кандидат, попавший в диапазон регионов. Вне диапазона
+    # — значит, другие единицы; если не подошёл ни один, строку РФ не пишем,
     # national_total тогда не задаётся (как у других CSV без итога по РФ).
-    reg = [v for name, v in rows if name != "Российская Федерация"]
-    rows = [(name, v) for name, v in rows
-            if name != "Российская Федерация" or min(reg) <= v <= max(reg)]
+    rows = [(name, v) for name, v in rows if name != "Российская Федерация"]
+    reg = [v for _, v in rows]
+    rf = next((v for v in rf_candidates if min(reg) <= v <= max(reg)), None)
+    if rf is not None:
+        rows.append(("Российская Федерация", rf))
     out = RAW / fname
     with out.open("w", encoding="utf-8") as f:
         w = csv.writer(f)
