@@ -211,7 +211,7 @@ indicators:
   Y477050016:
     name: "Инвестиции в технологическое обновление (обрабатывающие производства)"
     unit: "млн руб."
-    subsection: "Обрабатывающие производства"
+    subsection: "В том числе по видам экономической деятельности: обрабатывающие производства"
     indicator_type: industrial
   # Экология: СР41 (выбросы в атмосферу от стационарных источников).
   # Объём (тыс. тонн), не ставка — rate_base не указан.
@@ -237,14 +237,12 @@ indicators:
   Y477110450:
     name: "Численность зрителей театров на 1000 человек населения"
     unit: "на 1000"
-    subsection: "Численность зрителей театров"
     indicator_type: general
     rate_base: population
   # СР65 (культура — музеи): число посещений музеев на 1000. Ставка.
   Y477110451:
     name: "Число посещений музеев на 1000 человек населения"
     unit: "на 1000"
-    subsection: "Число посещений музеев"
     indicator_type: general
     rate_base: population
   # СР62 (библиотеки) — библиотечный фонд на 1000 человек. Ставка.
@@ -361,31 +359,6 @@ csv_indicators:
     csv_path: "data/raw/airports_by_region.csv"
     formula: "Число крупных пассажирских аэропортов в регионе"
     source: "OurAirports: https://ourairports.com/data"
-  # СР61-67 — культура. CSV собирает scripts/build_culture_by_region.py
-  # (opendata.mkrf.ru). Пока CSV нет — показатель пропустится ETL с сообщением.
-  C4771006061:  # СР61
-    name: "Обеспеченность театрами (число мест)"
-    unit: "мест"
-    indicator_type: general
-    rate_base: population
-    csv_path: "data/raw/theaters_by_region.csv"
-    formula: "Сумма мест в театрах региона / Численность населения * 1000"
-    source: "Открытые данные Минкультуры: https://opendata.mkrf.ru/opendata/7705851331-stat_theaters"
-  C4771006062:  # СР62
-    name: "Обеспеченность библиотеками"
-    unit: "библиотек"
-    indicator_type: general
-    csv_path: "data/raw/libraries_by_region.csv"
-    formula: "Число общедоступных библиотек в регионе"
-    source: "Открытые данные Минкультуры: https://opendata.mkrf.ru"
-  C4771006063:  # СР63
-    name: "Обеспеченность кинотеатрами (число мест)"
-    unit: "мест"
-    indicator_type: general
-    rate_base: population
-    csv_path: "data/raw/cinemas_by_region.csv"
-    formula: "Сумма мест в кинозалах региона / Численность населения * 1000"
-    source: "Открытые данные Минкультуры (cinema_halls): https://opendata.mkrf.ru"
   # СР44 — отходы утилизированные. CSV собирает scripts/build_waste_utilization_csv.py
   # (паркет Y477070020 с subsection «Утилизация и обезвреживание... Всего»).
   # Через CSV потому что Y477070020 уже используется для СР43 с другим subsection.
