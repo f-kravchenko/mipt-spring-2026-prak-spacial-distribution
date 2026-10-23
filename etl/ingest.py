@@ -132,6 +132,10 @@ def load_indicators(engine, indicators, parquet_path=None, year=None,
                 national = regional_value_lookup(
                     parquet_path, 'Российская Федерация', code, year,
                     subsection=meta.get('subsection'), object_level='Страна')
+                # итог по РФ бывает в других единицах, чем у регионов
+                # (Y477110071: млрд вместо млн руб.) — national_scale в конфиге
+                if national is not None and meta.get('national_scale'):
+                    national *= meta['national_scale']
             conn.execute(text("""
                 INSERT INTO indicator (code, name, unit, elasticity, r2, indicator_type,
                                        national_total, rate_base)
