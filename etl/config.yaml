@@ -64,10 +64,11 @@ regions:
     traveltime: "data/processed/traveltime_novosibirsk.csv"
     # научно-образовательная инфраструктура — 11-я маска, тот же скрипт
     science: "data/processed/science_novosibirsk.csv"
-  # Регион апробации (26.10). Без ИКГС: граница и опорные города из OSM
+  # Регион апробации (26.10): граница и опорные города из OSM
   # (etl.fetch_region_border), население — вырезка WorldPop
   # (etl.clip_worldpop_novosibirsk --bbox), сетка — etl.build_grid без БД,
   # маски — scripts.compute_masks_overpass, дороги — etl.fetch_infra_novosibirsk.
+  # ИКГС: баллы-2024 в ikgs_scores.json, контуры НП — etl.fetch_index_region без БД.
   - slug: voronezh
     name: "Воронежская область"
     object_name: "Воронежская область"

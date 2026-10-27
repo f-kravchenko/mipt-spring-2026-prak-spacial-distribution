@@ -20,7 +20,7 @@ if [ ! -f .env.prod ]; then
 fi
 
 SLUGS=("$@")
-[ ${#SLUGS[@]} -eq 0 ] && SLUGS=(novosibirsk_ikgs krasnodar yakutia_center moscow)
+[ ${#SLUGS[@]} -eq 0 ] && SLUGS=(novosibirsk_ikgs krasnodar yakutia_center moscow voronezh)
 
 COMPOSE=(docker compose --env-file .env.prod -f docker-compose.prod.yml)
 for slug in "${SLUGS[@]}"; do

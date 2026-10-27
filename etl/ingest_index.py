@@ -12,7 +12,13 @@ ingest_index_novosibirsk.py). Значение = балл реестра по ф
 Данные: data/processed/<slug>_cities.json (name,lon,lat,score — fetch_index_region),
 <slug>_footprint.json, опц. <slug>_osm.json, <slug>_infra.json, <slug>_pop.tif.
 
+Без DATABASE_URL пишет только файлы фронта (apps/web/public/<slug>_border.geojson и
+<slug>_npcontours.geojson) по border региона из etl/config.yaml: на ВДС ingest_index
+пишет их внутри контейнера etl, а веб собирается из репозитория, поэтому у нового
+индекс-региона их собирают локально и коммитят.
+
 Запуск:  DATABASE_URL=... python -m etl.ingest_index --region krasnodar
+Файлы фронта:  python -m etl.ingest_index --region voronezh
 """
 
 import argparse
@@ -30,6 +36,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROC = os.path.join(ROOT, "data/processed")
 PUB = os.path.join(ROOT, "apps/web/public")
 RUSSIA = os.path.join(PUB, "russia.geojson")
+CONFIG = os.path.join(ROOT, "etl/config.yaml")
 MIGRATION = os.path.join(ROOT, "deploy/helm/spatial-masks/files/migrations/0010_tile_index.sql")
 KM = 111.32
 SIGMA_KM = 15.0   # затухание «присутствия» от города
@@ -131,8 +138,7 @@ def main():
     a = ap.parse_args()
     url = (a.database_url or "").replace("postgresql+psycopg://", "postgresql://") \
                                .replace("postgresql+psycopg2://", "postgresql://")
-    if not url:
-        raise SystemExit("Задайте DATABASE_URL")
+    files_only = not url  # без БД — только файлы фронта (см. docstring)
     slug, step = a.region, a.step_km
     p = lambda suf: os.path.join(PROC, f"{slug}_{suf}")
 
@@ -141,19 +147,30 @@ def main():
     from shapely.geometry import Polygon, shape
     from shapely.ops import unary_union
 
-    conn = psycopg2.connect(url)
-    conn.autocommit = False
-    cur = conn.cursor()
-    if os.path.exists(MIGRATION):
-        cur.execute(open(MIGRATION, encoding="utf-8").read())
-    reg, name, border = get_region(cur, slug)
-    cur.execute("""
-        INSERT INTO indicator (code, name, unit, indicator_type)
-        VALUES (%s, %s, %s, 'index')
-        ON CONFLICT (code) DO UPDATE SET
-            name = EXCLUDED.name, unit = EXCLUDED.unit,
-            indicator_type = EXCLUDED.indicator_type
-    """, (IKGS_CODE, IKGS_NAME, IKGS_UNIT))
+    if files_only:
+        import geopandas as gpd
+        import yaml
+        rcfg = next((r for r in yaml.safe_load(open(CONFIG, encoding="utf-8"))["regions"]
+                     if r["slug"] == slug and r.get("border")), None)
+        if rcfg is None:
+            raise SystemExit(f"Задайте DATABASE_URL: у {slug} нет border в etl/config.yaml")
+        # тот же полигон, что etl.ingest кладёт в region (upsert_region)
+        reg, name = None, rcfg["name"]
+        border = gpd.read_file(os.path.join(ROOT, rcfg["border"])).to_crs(4326).union_all()
+    else:
+        conn = psycopg2.connect(url)
+        conn.autocommit = False
+        cur = conn.cursor()
+        if os.path.exists(MIGRATION):
+            cur.execute(open(MIGRATION, encoding="utf-8").read())
+        reg, name, border = get_region(cur, slug)
+        cur.execute("""
+            INSERT INTO indicator (code, name, unit, indicator_type)
+            VALUES (%s, %s, %s, 'index')
+            ON CONFLICT (code) DO UPDATE SET
+                name = EXCLUDED.name, unit = EXCLUDED.unit,
+                indicator_type = EXCLUDED.indicator_type
+        """, (IKGS_CODE, IKGS_NAME, IKGS_UNIT))
 
     # светлая подложка + контуры НП для фронта (слои nsk-region / nsk-cities)
     json.dump({"type": "FeatureCollection", "features": [
@@ -242,6 +259,9 @@ def main():
                           "geometry": unary_union(geoms).__geo_interface__})
     json.dump({"type": "FeatureCollection", "features": feats},
               open(os.path.join(PUB, f"{slug}_npcontours.geojson"), "w", encoding="utf-8"), ensure_ascii=False)
+    if files_only:
+        print(f"{slug}: {slug}_border.geojson, {slug}_npcontours.geojson ({len(feats)} НП) → {PUB}")
+        return
 
     # маски присутствия (яркость) = 10 масок словаря отгруженных товаров, слаги
     # таблицы mask. На своей сетке считаем геометрические/OSM-маски; regression/

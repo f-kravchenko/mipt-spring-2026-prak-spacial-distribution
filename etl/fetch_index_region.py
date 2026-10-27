@@ -4,7 +4,9 @@
 из OSM (place-узлы в bbox региона, матчим по имени), границы НП — полигоны OSM
 place=city|town того же имени.
 
-Полигон региона читаем из БД по slug (у якутского «центра» он только там).
+Полигон региона читаем из БД по slug (у якутского «центра» он только там), а без
+DATABASE_URL — из border региона в etl/config.yaml (регионы апробации: граница
+из etl.fetch_region_border, в БД их до первого ETL нет).
 Оставляем города, попавшие ВНУТРЬ полигона (для «центра» отсекает дальние НП).
 
 Пишет data/processed/<slug>_cities.json (name,lon,lat,score) и
@@ -12,6 +14,7 @@ place=city|town того же имени.
 (маски-яркость), значение ИКГС от них не зависит.
 
 Запуск:  DATABASE_URL=... python -m etl.fetch_index_region --region krasnodar
+Без БД:  python -m etl.fetch_index_region --region voronezh
 """
 
 import argparse
@@ -27,6 +30,7 @@ from shapely.prepared import prep
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCORES = os.path.join(ROOT, "data/processed/ikgs_scores.json")
+CONFIG = os.path.join(ROOT, "etl/config.yaml")
 OVERPASS = "https://overpass-api.de/api/interpreter"
 HEADERS = {"User-Agent": "mipt-deaggr-etl/1.0 (practicum research)"}
 
@@ -47,6 +51,14 @@ def query(body, timeout=90, retries=4):
 
 
 def region_polygon(url, slug):
+    if not url:
+        import geopandas as gpd
+        import yaml
+        reg = next((r for r in yaml.safe_load(open(CONFIG, encoding="utf-8"))["regions"]
+                    if r["slug"] == slug and r.get("border")), None)
+        if reg is None:
+            raise SystemExit(f"Задайте DATABASE_URL: у {slug} нет border в etl/config.yaml")
+        return gpd.read_file(os.path.join(ROOT, reg["border"])).to_crs(4326).union_all()
     conn = psycopg2.connect(url)
     with conn, conn.cursor() as cur:
         cur.execute("SELECT ST_AsGeoJSON(geom) FROM region WHERE slug=%s", (slug,))
@@ -127,8 +139,6 @@ def main():
     a = ap.parse_args()
     url = (a.database_url or "").replace("postgresql+psycopg://", "postgresql://") \
                                .replace("postgresql+psycopg2://", "postgresql://")
-    if not url:
-        raise SystemExit("Задайте DATABASE_URL")
 
     scores = json.load(open(SCORES, encoding="utf-8"))[a.region]
     poly = region_polygon(url, a.region)
