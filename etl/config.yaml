@@ -283,11 +283,15 @@ indicators:
     unit: "%"
     indicator_type: general
     rate_base: population
+  # Энергоёмкость — ставка (кг у.т. на 10 тыс. руб. ВРП), без rate_base
+  # раскладывалась по ячейкам как сумма. Настоящий знаменатель — ВРП, по ячейкам
+  # его нет; ближайшая база на сетке — население (как у ИНФ16).
   Y477090017:
     name: "Энергоёмкость ВРП"
     unit: "кг у.т. на 10 тыс. руб."
     subsection: "В текущих ценах"
     indicator_type: general
+    rate_base: population
   # ИНФ16 — степень износа основных фондов. Ставка (%): настоящий знаменатель —
   # стоимость ОФ, по ячейкам её нет; ближайшая база на сетке — население.
   Y477110390:
@@ -314,6 +318,10 @@ csv_indicators:
     indicator_type: general
     # Доля, а не объём (ОШИБКИ, задача 15): rate_base сохраняет среднее, а не сумму.
     rate_base: population
+    # Строка РФ (national_total, без неё «Доля России» отдаёт 404): Росстат,
+    # nauka_3_2025.xlsx, табл. 2, 2024 г.: (55 738 + 90 969) / 339 104 = 43,3%.
+    # Регионы в CSV — тоже 2024 г.: среднее по ним, взвешенное по числу
+    # исследователей (Y477110473), 43,3%; за 2023 г. по РФ было бы 43,7%.
     csv_path: "data/raw/young_researchers_by_region.csv"
     formula: "Численность исследователей до 39 лет / Общая численность исследователей * 100"
     source: "Раздел «Наука» Росстата: https://rosstat.gov.ru/statistics/science"
@@ -451,8 +459,8 @@ csv_indicators:
     source: "Росстат, «Регионы России»: https://rosstat.gov.ru/folder/210/document/13204"
   # Блок 5 ТЗ — инфраструктура (ИНФ12–ИНФ18). ИНФ12/ИНФ13 собирают скрипты
   # scripts/build_universities_csv.py (Wikidata + паркет) и build_ckp_csv.py
-  # (ckp-rf.ru + перечень ПИШ), ИНФ15 — build_fixed_assets_csv.py, ИНФ18 — CSV,
-  # собранный вручную. ИНФ14 и ИНФ17 — открытых данных нет.
+  # (ckp-rf.ru + перечень ПИШ), ИНФ15 — build_fixed_assets_csv.py, ИНФ18 —
+  # build_tech_age_csv.py (форма 2-наука, табл. 6). ИНФ14 и ИНФ17 — открытых данных нет.
   C4771005012:  # ИНФ12
     name: "Число организаций высшего образования на 100 тыс. жителей"
     unit: "на 100 тыс."
@@ -484,7 +492,7 @@ csv_indicators:
     rate_base: population
     csv_path: "data/raw/tech_under_5_years_by_region.csv"
     formula: "Стоимость машин и оборудования до 5 лет / Общая стоимость машин и оборудования * 100"
-    source: "Раздел «Наука» Росстата: https://rosstat.gov.ru/statistics/science"
+    source: "Форма 2-наука за 2024 г., табл. 6 по ОКАТО: https://rosstat.gov.ru/storage/mediabank/2-nauka_2024.rar"
 
 # Итоговая композиция (как у Полины) + конфигурации ablation (§9.5 ТЗ).
 final_weights:
