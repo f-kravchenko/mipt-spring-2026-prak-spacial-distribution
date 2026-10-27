@@ -11,8 +11,12 @@
 src/masks/road_network|railway|power, но по сетке индекса в features.weight).
 
 Кэш: data/processed/osm_nso_infra.json. Запуск:  python -m etl.fetch_infra_novosibirsk
+Другой регион (файл для roads_infra в etl/config.yaml):
+  python -m etl.fetch_infra_novosibirsk --bbox 49.358,37.938,52.303,43.147 \
+      --out data/processed/voronezh_infra.json
 """
 
+import argparse
 import json
 import os
 import time
@@ -25,11 +29,12 @@ OVERPASS = "https://overpass-api.de/api/interpreter"
 HEADERS = {"User-Agent": "mipt-deaggr-etl/1.0 (practicum research)"}
 BBOX = "53.2,75.0,57.3,85.2"  # НСО с запасом
 
-LAYERS = {
-    "road":  f'way["highway"~"^(motorway|trunk|primary|secondary)$"]({BBOX});',
-    "rail":  f'way["railway"="rail"]({BBOX});',
-    "power": f'way["power"="line"]({BBOX});',
-}
+def layers(bbox):
+    return {
+        "road":  f'way["highway"~"^(motorway|trunk|primary|secondary)$"]({bbox});',
+        "rail":  f'way["railway"="rail"]({bbox});',
+        "power": f'way["power"="line"]({bbox});',
+    }
 
 
 def fetch(selector):
@@ -63,8 +68,12 @@ def lines(elems):
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--bbox", default=BBOX, help="minlat,minlon,maxlat,maxlon")
+    ap.add_argument("--out", default=OUT)
+    a = ap.parse_args()
     out = {}
-    for name, sel in LAYERS.items():
+    for name, sel in layers(a.bbox).items():
         elems = fetch(sel)
         out[name] = sample(elems)
         if name == "road":
@@ -72,8 +81,8 @@ def main():
         print(f"{name:6}: {len(out[name])} точек"
               + (f", {len(out['road_lines'])} линий" if name == "road" else ""))
         time.sleep(3)
-    json.dump(out, open(OUT, "w", encoding="utf-8"))
-    print(f"→ {OUT}")
+    json.dump(out, open(a.out, "w", encoding="utf-8"))
+    print(f"→ {a.out}")
 
 
 if __name__ == "__main__":

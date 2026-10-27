@@ -43,16 +43,19 @@ PROC = os.path.join(ROOT, "data/processed")
 def region_polygon(url, slug, border_path=None):
     """Полигон региона: из БД, иначе из уже сохранённой границы. Фолбэк нужен на
     проде — там сетку собирают ДО ingest_index, то есть регион в БД может ещё не
-    существовать, а border_<name>.gpkg лежит в репозитории."""
-    import psycopg2
-    from shapely.geometry import shape
-    conn = psycopg2.connect(url)
-    with conn, conn.cursor() as cur:
-        cur.execute("SELECT ST_AsGeoJSON(geom) FROM region WHERE slug=%s", (slug,))
-        row = cur.fetchone()
-    conn.close()
-    if row:
-        return shape(json.loads(row[0]))
+    существовать, а border_<name>.gpkg лежит в репозитории. Без url БД не
+    трогаем вовсе: так собирают регионы апробации, у которых граница из
+    etl.fetch_region_border."""
+    if url:
+        import psycopg2
+        from shapely.geometry import shape
+        conn = psycopg2.connect(url)
+        with conn, conn.cursor() as cur:
+            cur.execute("SELECT ST_AsGeoJSON(geom) FROM region WHERE slug=%s", (slug,))
+            row = cur.fetchone()
+        conn.close()
+        if row:
+            return shape(json.loads(row[0]))
     if border_path and os.path.exists(border_path):
         import geopandas as gpd
         b = gpd.read_file(border_path).to_crs(4326)
@@ -141,9 +144,9 @@ def main():
     a = ap.parse_args()
     url = (a.database_url or "").replace("postgresql+psycopg://", "postgresql://") \
                                .replace("postgresql+psycopg2://", "postgresql://")
-    if not url:
-        raise SystemExit("Задайте DATABASE_URL")
     slug, name = a.region, a.name or a.region
+    if not url and not os.path.exists(os.path.join(PROC, f"border_{name}.gpkg")):
+        raise SystemExit("Задайте DATABASE_URL или положите border_<name>.gpkg")
 
     import geopandas as gpd
     import pandas as pd

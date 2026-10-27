@@ -34,16 +34,22 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", default=os.environ.get("WORLDPOP_SRC", URL),
                     help="национальный растр (локальный файл или /vsicurl/URL)")
-    src_path = ap.parse_args().src
+    # другие регионы: bbox из их border_<name>.gpkg, выход <slug>_pop.tif,
+    # который читает etl.build_grid
+    ap.add_argument("--bbox", type=float, nargs=4, default=BBOX,
+                    metavar=("MINLON", "MINLAT", "MAXLON", "MAXLAT"))
+    ap.add_argument("--out", default=OUT)
+    a = ap.parse_args()
+    src_path, bbox, out = a.src, a.bbox, a.out
     with rasterio.open(src_path) as src:
-        win = from_bounds(*BBOX, transform=src.transform).round_offsets().round_lengths()
+        win = from_bounds(*bbox, transform=src.transform).round_offsets().round_lengths()
         data = src.read(1, window=win)
         profile = src.profile.copy()
         profile.update(height=data.shape[0], width=data.shape[1],
                        transform=src.window_transform(win), compress="lzw")
-        with rasterio.open(OUT, "w", **profile) as dst:
+        with rasterio.open(out, "w", **profile) as dst:
             dst.write(data, 1)
-    print(f"{data.shape[1]}×{data.shape[0]} пикс → {OUT}  "
+    print(f"{data.shape[1]}×{data.shape[0]} пикс → {out}  "
           f"(nodata={profile.get('nodata')})")
 
 
