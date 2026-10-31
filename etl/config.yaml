@@ -616,6 +616,17 @@ csv_indicators:
     csv_path: "data/raw/oez_zones_by_region.csv"
     formula: "Число действующих ОЭЗ ППТ/ТВТ/портового типов на территории субъекта"
     source: "Минэкономразвития: https://www.economy.gov.ru/material/directions/regionalnoe_razvitie/instrumenty_razvitiya_territoriy/osobye_ekonomicheskie_zony; КонсультантПлюс"
+  # ИНФ31 — балл 0/1/2 по наличию ЦКПНО. Раздельного реестра ЦКП нет
+  # (ckp-rf.ru с не-RU IP закрыт), балл выведен из счётчика объектов НТИ ИНФ13:
+  # 0 — нет объектов, 1 — 1-3, 2 — 4+. Пороги наши: ТЗ задаёт только шкалу.
+  # Собирает scripts/build_ckp_score_csv.py из nti_objects_by_region.csv.
+  C4771005031:  # ИНФ31
+    name: "Наличие центров коллективного пользования научным оборудованием"
+    unit: "балл 0-2"
+    indicator_type: general
+    csv_path: "data/raw/ckp_score_by_region.csv"
+    formula: "Балл по числу объектов НТИ (ЦКП+УНУ+ПИШ): 0 — нет, 1 — 1-3, 2 — 4 и больше"
+    source: "ckp-rf.ru (через nti_objects_by_region.csv показателя ИНФ13) + перечень ПИШ"
 
 # Итоговая композиция (как у Полины) + конфигурации ablation (§9.5 ТЗ).
 final_weights:

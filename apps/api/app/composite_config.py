@@ -207,6 +207,11 @@ COMPOSITE = {
                   "road_network_mask": 0.20, "railway_mask": 0.15,
                   "distance_to_city_mask": 0.15},
     },
+    "C4771005031": {  # ИНФ31 — балл ЦКПНО 0-2
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"science_mask": 0.50, "worldpop_mask": 0.20,
+                  "distance_to_center_mask": 0.15, "territory_type_mask": 0.15},
+    },
     # базовая техника ИКТ-среза: веса как у цифровых собратьев выше
     "Y477110168": {  # персональные компьютеры
         "direction": "direct", "indicator_weight": 0.05,
