@@ -156,6 +156,30 @@ COMPOSITE = {
                   "power_lines_mask": 0.15, "worldpop_mask": 0.15,
                   "distance_to_city_mask": 0.10},
     },
+    # ИНФ23/ИНФ2 — цифровая инфраструктура (ИКТ в организациях, 2024). Цифровые
+    # технологии — городская и организационная история: население + близость к
+    # городу + дороги; ИИ дополнительно leaning к science-маске (наукоёмкие
+    # центры внедряют первыми).
+    "Y477110170": {  # технологии ИИ
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"science_mask": 0.30, "worldpop_mask": 0.30,
+                  "distance_to_city_mask": 0.20, "road_network_mask": 0.20},
+    },
+    "Y477110167": {  # облачные сервисы
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"worldpop_mask": 0.35, "distance_to_city_mask": 0.25,
+                  "road_network_mask": 0.20, "territory_type_mask": 0.20},
+    },
+    "Y477110172": {  # цифровые платформы
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"worldpop_mask": 0.35, "distance_to_city_mask": 0.25,
+                  "road_network_mask": 0.20, "territory_type_mask": 0.20},
+    },
+    "Y477110260": {  # организации с веб-сайтом
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"worldpop_mask": 0.35, "distance_to_city_mask": 0.20,
+                  "road_network_mask": 0.25, "territory_type_mask": 0.20},
+    },
 }
 
 COMPOSITE_NAME = "Комплексная оценка (результирующий слой)"
