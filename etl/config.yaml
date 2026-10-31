@@ -81,6 +81,27 @@ regions:
     territory: "data/processed/territory_voronezh.csv"
     traveltime: "data/processed/traveltime_voronezh.csv"
     science: "data/processed/science_voronezh.csv"
+  # Второй регион апробации (31.10), схема та же, что у Воронежской области:
+  # граница из OSM (etl.fetch_region_border; ЗАТО Саров OSM вырезает из контура
+  # области — подключён --enclave «городской округ Саров»), население — вырезка
+  # WorldPop, сетка — etl.build_grid без БД, маски — scripts.compute_masks_overpass,
+  # дороги — etl.fetch_infra_novosibirsk. Сетка/маски считались ДО подключения
+  # анклава: Росстат-композиции не покрывают ~230 км² Сарова (ИКГС-слой —
+  # покрывает, у него своя сетка). ИКГС: баллы-2024 из реестра Минстроя
+  # (ikgs.pdf в корне, сверен с отчётом ИЭГ), контуры НП — etl.fetch_index_region
+  # без БД.
+  - slug: nizhny_novgorod
+    name: "Нижегородская область"
+    object_name: "Нижегородская область"
+    grid: "data/processed/grid_nizhny_novgorod_1km_features.gpkg"
+    border: "data/processed/border_nizhny_novgorod.gpkg"
+    cities: "data/processed/cities_nizhny_novgorod.csv"
+    roads_infra: "data/processed/nizhny_novgorod_infra.json"
+    railway: "data/processed/railway_nizhny_novgorod.csv"
+    power: "data/processed/power_nizhny_novgorod.csv"
+    territory: "data/processed/territory_nizhny_novgorod.csv"
+    traveltime: "data/processed/traveltime_nizhny_novgorod.csv"
+    science: "data/processed/science_nizhny_novgorod.csv"
 
 indicators:
   Y477090007:

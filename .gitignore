@@ -3,6 +3,7 @@ __pycache__/
 .DS_Store
 .vscode/
 venv/
+.venv-etl/
 cache/
 notebooks/cache/
 src/__pycache__/
@@ -14,6 +15,7 @@ data/processed/*.tif
 !data/processed/novosibirsk_ikgs_pop.tif
 # то же для регионов апробации: сетку можно пересобрать без 194 МБ растра
 !data/processed/voronezh_pop.tif
+!data/processed/nizhny_novgorod_pop.tif
 
 # Сетки МО/Краснодара/Якутии лежат в репозитории (39-48 МБ), но НСО — 148 МБ:
 # 550 тыс. ячеек против 142-186 тыс., это выше жёсткого лимита GitHub (100 МБ),

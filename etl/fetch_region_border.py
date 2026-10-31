@@ -53,9 +53,16 @@ def overpass(q):
     raise SystemExit("Overpass недоступен")
 
 
-def region_polygon(osm_name):
-    """Полигон субъекта: внешние линии relation, склеенные polygonize."""
-    from shapely.geometry import LineString
+def region_polygon(osm_name, enclave=None):
+    """Полигон субъекта: внешние линии relation, склеенные polygonize.
+
+    Дырки заливаем (только exterior): ЗАТО-анклавы (Саров в Нижегородской
+    области) в relation субъекта — кольца-«дырки», хотя административно
+    ЗАТО входит в субъект, и его города — в реестре ИКГС региона. Если
+    анклав вырезан из внешнего контура (вогнутая «выемка», Саров так и
+    устроен), контур субъекта его не включает — такой polygon добавляем
+    явно через --enclave (admin-отношение с этим именем)."""
+    from shapely.geometry import LineString, Polygon
     from shapely.ops import linemerge, polygonize, unary_union
     q = (f'[out:json][timeout:240];relation["boundary"="administrative"]'
          f'["admin_level"="4"]["name"="{osm_name}"];out geom;')
@@ -69,7 +76,24 @@ def region_polygon(osm_name):
     polys = list(polygonize(linemerge(unary_union(lines))))
     if not polys:
         raise SystemExit(f"«{osm_name}»: контур не замкнулся")
-    return unary_union(polys)
+    merged = unary_union(polys)
+    parts = merged.geoms if merged.geom_type == "MultiPolygon" else [merged]
+    poly = unary_union([Polygon(g.exterior) for g in parts])
+    if enclave:
+        q = (f'[out:json][timeout:120];relation["boundary"="administrative"]'
+             f'["name"="{enclave}"];out geom;')
+        encl = overpass(q)
+        if len(encl) != 1:
+            raise SystemExit(f"«{enclave}»: найдено relation {len(encl)}, нужен ровно один")
+        lines = [LineString([(p["lon"], p["lat"]) for p in m["geometry"]])
+                 for m in encl[0]["members"]
+                 if m["type"] == "way" and m.get("role", "outer") in ("outer", "")
+                 and len(m.get("geometry", [])) > 1]
+        encl_polys = list(polygonize(linemerge(unary_union(lines))))
+        if not encl_polys:
+            raise SystemExit(f"«{enclave}»: контур не замкнулся")
+        poly = poly.union(unary_union(encl_polys))
+    return poly
 
 
 def city_points(poly, names):
@@ -96,6 +120,9 @@ def main():
     ap.add_argument("--region", required=True, help="slug региона (как в etl/config.yaml)")
     ap.add_argument("--name", help="основа имён файлов (по умолчанию = slug)")
     ap.add_argument("--osm-name", required=True, help="name субъекта в OSM")
+    ap.add_argument("--enclave", help="admin-отношение-анклав (ЗАТО), который OSM "
+                                      "вырезал из контура субъекта (Нижегородская "
+                                      "область: «городской округ Саров»)")
     ap.add_argument("--cities", required=True,
                     help="опорные города через запятую, первым — центр региона")
     a = ap.parse_args()
@@ -103,7 +130,7 @@ def main():
 
     import geopandas as gpd
 
-    poly = region_polygon(a.osm_name)
+    poly = region_polygon(a.osm_name, a.enclave)
     border = gpd.GeoDataFrame({"name": [a.region]}, geometry=[poly], crs=4326).to_crs(3857)
     border_path = os.path.join(PROC, f"border_{name}.gpkg")
     border.to_file(border_path, driver="GPKG")
