@@ -196,6 +196,11 @@ COMPOSITE = {
         "masks": {"worldpop_mask": 0.40, "distance_to_city_mask": 0.25,
                   "territory_type_mask": 0.20, "road_network_mask": 0.15},
     },
+    "C4771005021": {  # ИНФ21 — базовые станции мобильной связи на 100 тыс.
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"worldpop_mask": 0.30, "distance_to_city_mask": 0.25,
+                  "road_network_mask": 0.25, "territory_type_mask": 0.20},
+    },
     # базовая техника ИКТ-среза: веса как у цифровых собратьев выше
     "Y477110168": {  # персональные компьютеры
         "direction": "direct", "indicator_weight": 0.05,

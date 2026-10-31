@@ -592,6 +592,18 @@ csv_indicators:
     csv_path: "data/raw/green_space_per_capita_by_region.csv"
     formula: "Зеленые насаждения в городах, тыс. га (Y477030026) / Численность населения * 10 000"
     source: "Росстат (паркет): Y477030026, подраздел «всего» / Y477110461"
+  # ИНФ21 — охват мобильной связью. Карты покрытия и реестр РЭС закрыты,
+  # прокси — плотность сети базовых станций OSM на 100 тыс. жителей. Собирает
+  # scripts/build_masts_csv.py (два bbox-запроса на всю страну, разнос по
+  # регионам через russia.geojson).
+  C4771005021:  # ИНФ21
+    name: "Плотность сети базовых станций мобильной связи"
+    unit: "вышек на 100 тыс. чел"
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/mobile_masts_per_100k_by_region.csv"
+    formula: "Число вышек связи (OSM man_made=mast + tower:tower.type=communication) / Численность населения * 100 000"
+    source: "OpenStreetMap: https://www.openstreetmap.org; население — паркет Y477110373"
 
 # Итоговая композиция (как у Полины) + конфигурации ablation (§9.5 ТЗ).
 final_weights:
