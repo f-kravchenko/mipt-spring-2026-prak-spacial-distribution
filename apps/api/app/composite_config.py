@@ -180,6 +180,38 @@ COMPOSITE = {
         "masks": {"worldpop_mask": 0.35, "distance_to_city_mask": 0.20,
                   "road_network_mask": 0.25, "territory_type_mask": 0.20},
     },
+    "C4771002023": {  # ИНВ23 — темп роста затрат на инновационную деятельность
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"science_mask": 0.30, "territory_type_mask": 0.25,
+                  "worldpop_mask": 0.20, "road_network_mask": 0.15,
+                  "railway_mask": 0.10},
+    },
+    "Y477130022": {  # ЧК25 — з/п научных сотрудников к средней по региону
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"science_mask": 0.40, "worldpop_mask": 0.25,
+                  "distance_to_center_mask": 0.20, "territory_type_mask": 0.15},
+    },
+    "C4771006051": {  # СР51 — городская зелень на жителя
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"worldpop_mask": 0.40, "distance_to_city_mask": 0.25,
+                  "territory_type_mask": 0.20, "road_network_mask": 0.15},
+    },
+    # базовая техника ИКТ-среза: веса как у цифровых собратьев выше
+    "Y477110168": {  # персональные компьютеры
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"worldpop_mask": 0.35, "distance_to_city_mask": 0.20,
+                  "road_network_mask": 0.25, "territory_type_mask": 0.20},
+    },
+    "Y477110169": {  # серверы
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"worldpop_mask": 0.35, "distance_to_city_mask": 0.25,
+                  "road_network_mask": 0.20, "territory_type_mask": 0.20},
+    },
+    "Y477110166": {  # локальные вычислительные сети
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"worldpop_mask": 0.35, "distance_to_city_mask": 0.25,
+                  "road_network_mask": 0.20, "territory_type_mask": 0.20},
+    },
 }
 
 COMPOSITE_NAME = "Комплексная оценка (результирующий слой)"
