@@ -604,6 +604,18 @@ csv_indicators:
     csv_path: "data/raw/mobile_masts_per_100k_by_region.csv"
     formula: "Число вышек связи (OSM man_made=mast + tower:tower.type=communication) / Численность населения * 100 000"
     source: "OpenStreetMap: https://www.openstreetmap.org; население — паркет Y477110373"
+  # ИНФ36 — особые экономические зоны. Счётчик (объём) действующих зон
+  # ППТ/ТВТ/портового типов по субъекту; туристско-рекреационные НЕ входят.
+  # Ручной список (49 зон в 40 регионах, 2026): КонсультантПлюс по
+  # постановлениям + Минэкономразвития; regions без зон в CSV нет — показатель
+  # для них просто отсутствует (как у СР34 без ЖД-станций).
+  C4771005036:  # ИНФ36
+    name: "Действующие ОЭЗ промышленно-производственного, техновнедренческого и портового типов"
+    unit: "зон"
+    indicator_type: general
+    csv_path: "data/raw/oez_zones_by_region.csv"
+    formula: "Число действующих ОЭЗ ППТ/ТВТ/портового типов на территории субъекта"
+    source: "Минэкономразвития: https://www.economy.gov.ru/material/directions/regionalnoe_razvitie/instrumenty_razvitiya_territoriy/osobye_ekonomicheskie_zony; КонсультантПлюс"
 
 # Итоговая композиция (как у Полины) + конфигурации ablation (§9.5 ТЗ).
 final_weights:

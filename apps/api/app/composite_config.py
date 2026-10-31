@@ -201,6 +201,12 @@ COMPOSITE = {
         "masks": {"worldpop_mask": 0.30, "distance_to_city_mask": 0.25,
                   "road_network_mask": 0.25, "territory_type_mask": 0.20},
     },
+    "C4771005036": {  # ИНФ36 — действующие ОЭЗ (ППТ/ТВТ/портовые)
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"territory_type_mask": 0.30, "power_lines_mask": 0.20,
+                  "road_network_mask": 0.20, "railway_mask": 0.15,
+                  "distance_to_city_mask": 0.15},
+    },
     # базовая техника ИКТ-среза: веса как у цифровых собратьев выше
     "Y477110168": {  # персональные компьютеры
         "direction": "direct", "indicator_weight": 0.05,
