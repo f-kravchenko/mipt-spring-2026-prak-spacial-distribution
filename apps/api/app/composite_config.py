@@ -212,6 +212,28 @@ COMPOSITE = {
         "masks": {"science_mask": 0.50, "worldpop_mask": 0.20,
                   "distance_to_center_mask": 0.15, "territory_type_mask": 0.15},
     },
+    # СР63/64/66/67 — культура из OSM. Городские объекты: население + центр
+    # города; клубы (ДК) массовые и сельские — им ближе дороги и территория.
+    "C4771006063": {  # СР63 — кинотеатры
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"worldpop_mask": 0.40, "distance_to_city_mask": 0.30,
+                  "road_network_mask": 0.15, "territory_type_mask": 0.15},
+    },
+    "C4771006064": {  # СР64 — концертные залы
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"worldpop_mask": 0.40, "distance_to_center_mask": 0.25,
+                  "distance_to_city_mask": 0.20, "territory_type_mask": 0.15},
+    },
+    "C4771006066": {  # СР66 — выставочные залы
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"worldpop_mask": 0.40, "distance_to_city_mask": 0.30,
+                  "territory_type_mask": 0.20, "road_network_mask": 0.10},
+    },
+    "C4771006067": {  # СР67 — клубные учреждения (ДК)
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"worldpop_mask": 0.25, "road_network_mask": 0.25,
+                  "territory_type_mask": 0.25, "distance_to_city_mask": 0.25},
+    },
     # базовая техника ИКТ-среза: веса как у цифровых собратьев выше
     "Y477110168": {  # персональные компьютеры
         "direction": "direct", "indicator_weight": 0.05,

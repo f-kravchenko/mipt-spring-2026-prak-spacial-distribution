@@ -627,6 +627,44 @@ csv_indicators:
     csv_path: "data/raw/ckp_score_by_region.csv"
     formula: "Балл по числу объектов НТИ (ЦКП+УНУ+ПИШ): 0 — нет, 1 — 1-3, 2 — 4 и больше"
     source: "ckp-rf.ru (через nti_objects_by_region.csv показателя ИНФ13) + перечень ПИШ"
+  # СР63/64/66/67 — обеспеченность объектами культуры. Раздел «Культура»
+  # Росстата в парке кончается театрами/музеями/библиотеками, stat.mkrf.ru
+  # закрыт для не-RU IP — прокси из OSM (точечные объекты на 100 тыс. жителей,
+  # scripts/build_culture_osm_csv.py). Концертные залы = все theatre (чистый
+  # concert_hall в RU редок); выставочные залы = gallery/exhibition_centre —
+  # тег размечен лишь в 24 регионах, для остальных показателя нет.
+  C4771006063:  # СР63
+    name: "Обеспеченность кинотеатрами"
+    unit: "кинотеатров на 100 тыс. чел"
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/cinema_per_100k_by_region.csv"
+    formula: "Число кинотеатров (OSM amenity=cinema) / Численность населения * 100 000"
+    source: "OpenStreetMap: https://www.openstreetmap.org; население — паркет Y477110373"
+  C4771006064:  # СР64
+    name: "Обеспеченность концертными залами"
+    unit: "залов на 100 тыс. чел"
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/concert_halls_per_100k_by_region.csv"
+    formula: "Число театрально-концертных площадок (OSM amenity=theatre) / Численность населения * 100 000"
+    source: "OpenStreetMap: https://www.openstreetmap.org; население — паркет Y477110373"
+  C4771006066:  # СР66
+    name: "Обеспеченность выставочными залами"
+    unit: "залов на 100 тыс. чел"
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/exhibition_halls_per_100k_by_region.csv"
+    formula: "Число выставочных залов (OSM amenity=gallery|exhibition_centre) / Численность населения * 100 000"
+    source: "OpenStreetMap: https://www.openstreetmap.org; население — паркет Y477110373"
+  C4771006067:  # СР67
+    name: "Обеспеченность учреждениями культуры клубного типа"
+    unit: "учреждений на 100 тыс. чел"
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/clubs_per_100k_by_region.csv"
+    formula: "Число ДК и клубов (OSM amenity=community_centre) / Численность населения * 100 000"
+    source: "OpenStreetMap: https://www.openstreetmap.org; население — паркет Y477110373"
 
 # Итоговая композиция (как у Полины) + конфигурации ablation (§9.5 ТЗ).
 final_weights:
