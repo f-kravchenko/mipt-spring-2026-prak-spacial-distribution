@@ -13,6 +13,7 @@
   sport_grounds_per_100k_by_region.csv        СР53  площадок и полей на 100 тыс.
   rd_personnel_per_10k_by_region.csv          ЧК21  персонал НИР на 10 тыс.
   rd_expenditure_per_1k_by_region.csv         ИНВ13 тыс. руб. на 1000 чел
+  rd_capex_per_1k_by_region.csv               ИНВ12.2 тыс. руб. на 1000 чел
   patent_applications_per_10k_by_region.csv   НР11  заявок на 10 тыс.
   vtno_investments_per_1k_by_region.csv       ИНВ11 тыс. руб. на 1000 чел
   manufacturing_investment_per_1k_by_region.csv ИНВ12 тыс. руб. на 1000 чел
@@ -48,6 +49,7 @@ OUTPUTS = [
     ("rd_personnel_per_10k_by_region.csv", "Y477110471", None, 10),       # ЧК21
     # млн руб. / тыс. чел -> *1000 = тыс. руб. на 1000 чел
     ("rd_expenditure_per_1k_by_region.csv", "Y477110039", None, 1000),    # ИНВ13
+    ("rd_capex_per_1k_by_region.csv", "Y477110190", None, 1000),          # ИНВ12.2
     # заявок / тыс. чел -> *10 = на 10 тыс. чел
     ("patent_applications_per_10k_by_region.csv", "Y477110309", None, 10),  # НР11
     # ОШИБКИ, задача 17: инвестиции и доходы на 1000 жителей (млн руб. -> тыс. руб.)

@@ -421,6 +421,17 @@ csv_indicators:
     csv_path: "data/raw/researchers_renewal_per_1k_by_region.csv"
     formula: "Принято исследователей за год / Численность исследователей на конец года * 1000"
     source: "Форма 2-наука, табл. 4а_2 по ОКАТО: https://rosstat.gov.ru/storage/mediabank/2-nauka_2023.rar"
+  # Строка 16 таблицы: номера в ТЗ нет, код — следующий свободный в факторе ЧК2.
+  # Собирает scripts/build_nauka_2024_csv.py (форма 2-наука за 2024 г.), как и
+  # ИНВ14, ИНФ17 ниже. Ставка: база на сетке — население, как у ЧК22/ЧК24.
+  C4771001026:  # строка 16 (оплата труда работников НИР)
+    name: "Расчётная оплата труда работников НИР к средней по региону"
+    unit: "%"
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/rd_pay_to_regional_wage_by_region.csv"
+    formula: "Оплата труда работников НИР / Среднесписочная численность работников НИР / 12 / Среднемесячная з/п в субъекте (Y477110378) * 100"
+    source: "Форма 2-наука за 2024 г., табл. 46 и 1_2 по ОКАТО: https://rosstat.gov.ru/storage/mediabank/2-nauka_2024.rar"
   # ИНВ11 — инвестиции в основной капитал ВТНО. Объём (млн руб.), не ставка,
   # поэтому rate_base не указан — разносится как сумма по маскам.
   C4771002011:  # ИНВ11
@@ -525,6 +536,25 @@ csv_indicators:
     csv_path: "data/raw/rd_expenditure_per_1k_by_region.csv"
     formula: "Внутренние затраты на ИиР (Y477110039) / Численность населения * 1000"
     source: "Росстат, «Регионы России»: https://rosstat.gov.ru/folder/210/document/13204"
+  # ИНВ12.2 — строка 21 таблицы (своего номера в ТЗ нет, 122 = 12.2). Собирает
+  # scripts/build_per_capita_csv.py, как ИНВ13; объём Y477110190 тоже остаётся.
+  C4771002122:  # ИНВ12.2
+    name: "Капитальные затраты на научные исследования и разработки на 1000 жителей"
+    unit: "тыс. руб. на 1000 чел"
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/rd_capex_per_1k_by_region.csv"
+    formula: "Капитальные затраты на НИР (Y477110190) / Численность населения * 1000"
+    source: "Росстат, «Регионы России»: https://rosstat.gov.ru/folder/210/document/13204"
+  # ИНВ14 — scripts/build_nauka_2024_csv.py, табл. 7 формы 2-наука (лист на субъект).
+  C4771002014:  # ИНВ14
+    name: "Удельный вес внебюджетных средств во внутренних затратах на НИР"
+    unit: "%"
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/rd_offbudget_share_by_region.csv"
+    formula: "(Внутренние затраты на НИР − Средства бюджетов всех уровней) / Внутренние затраты на НИР * 100"
+    source: "Форма 2-наука за 2024 г., табл. 7 по ОКАТО: https://rosstat.gov.ru/storage/mediabank/2-nauka_2024.rar"
   C4771003011:  # НР11
     name: "Коэффициент изобретательской активности (патентные заявки на 10 тыс. жителей)"
     unit: "заявок на 10 тыс."
@@ -536,7 +566,8 @@ csv_indicators:
   # Блок 5 ТЗ — инфраструктура (ИНФ12–ИНФ18). ИНФ12/ИНФ13 собирают скрипты
   # scripts/build_universities_csv.py (Wikidata + паркет) и build_ckp_csv.py
   # (ckp-rf.ru + перечень ПИШ), ИНФ15 — build_fixed_assets_csv.py, ИНФ18 —
-  # build_tech_age_csv.py (форма 2-наука, табл. 6). ИНФ14 и ИНФ17 — открытых данных нет.
+  # build_tech_age_csv.py (форма 2-наука, табл. 6), ИНФ17 — build_nauka_2024_csv.py
+  # (табл. 6 и 1_2). ИНФ14 — открытых данных нет.
   C4771005012:  # ИНФ12
     name: "Число организаций высшего образования на 100 тыс. жителей"
     unit: "на 100 тыс."
@@ -561,6 +592,15 @@ csv_indicators:
     csv_path: "data/raw/fixed_assets_renewal_by_region.csv"
     formula: "Ввод в действие основных фондов / Наличие основных фондов на конец года * 100"
     source: "Росстат (паркет): Y477110029 / Y477110391"
+  # ИНФ17: у ХМАО и ЯНАО стоимость оборудования скрыта («...»), их в CSV нет.
+  C4771005017:  # ИНФ17
+    name: "Техническая вооружённость сектора исследований и разработок"
+    unit: "тыс. руб. на работника"
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/rd_equipment_per_worker_by_region.csv"
+    formula: "Стоимость машин и оборудования / Среднесписочная численность работников НИР"
+    source: "Форма 2-наука за 2024 г., табл. 6 и 1_2 по ОКАТО: https://rosstat.gov.ru/storage/mediabank/2-nauka_2024.rar"
   C4771005018:  # ИНФ18
     name: "Удельный вес машин и оборудования в возрасте до 5 лет"
     unit: "%"
