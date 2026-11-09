@@ -665,6 +665,28 @@ csv_indicators:
     csv_path: "data/raw/clubs_per_100k_by_region.csv"
     formula: "Число ДК и клубов (OSM amenity=community_centre) / Численность населения * 100 000"
     source: "OpenStreetMap: https://www.openstreetmap.org; население — паркет Y477110373"
+  # СР32/33 — доступность автодорог: доля населения в 30 км («30 мин езды»
+  # по ТЗ). Классы — прокси OSM (сверка по перечням дорог недоступна):
+  # СР32 федеральные motorway|trunk|primary, СР33 региональные
+  # primary|secondary (primary входит в оба — так в разведке ТЗ). Считает
+  # scripts/build_road_access_csv.py: экстракты Geofabrik по ФО (Overpass
+  # такие объёмы не отдаёт) + WorldPop, расстояния — по сфере (хорда).
+  C4771006032:  # СР32
+    name: "Доля населения в 30 км от автодорог федерального значения"
+    unit: "% населения"
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/sr32_federal_road_access_by_region.csv"
+    formula: "Население (WorldPop) в 30 км от ближайшей вершины дороги motorway|trunk|primary / всё население региона * 100"
+    source: "OpenStreetMap (Geofabrik по ФО): https://download.geofabrik.de; население — WorldPop 2020 1 км"
+  C4771006033:  # СР33
+    name: "Доля населения в 30 км от автодорог регионального значения"
+    unit: "% населения"
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/sr33_regional_road_access_by_region.csv"
+    formula: "Население (WorldPop) в 30 км от ближайшей вершины дороги primary|secondary / всё население региона * 100"
+    source: "OpenStreetMap (Geofabrik по ФО): https://download.geofabrik.de; население — WorldPop 2020 1 км"
 
 # Итоговая композиция (как у Полины) + конфигурации ablation (§9.5 ТЗ).
 final_weights:

@@ -234,6 +234,18 @@ COMPOSITE = {
         "masks": {"worldpop_mask": 0.25, "road_network_mask": 0.25,
                   "territory_type_mask": 0.25, "distance_to_city_mask": 0.25},
     },
+    # СР32/33 — доступность дорог: прямой пространственный аналог — маска
+    # дорожной сети; доля населения тоже ведёт
+    "C4771006032": {  # СР32 — федеральные дороги в 30 км
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"road_network_mask": 0.40, "worldpop_mask": 0.25,
+                  "road_traveltime_mask": 0.20, "territory_type_mask": 0.15},
+    },
+    "C4771006033": {  # СР33 — региональные дороги в 30 км
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"road_network_mask": 0.40, "worldpop_mask": 0.25,
+                  "road_traveltime_mask": 0.20, "territory_type_mask": 0.15},
+    },
     # базовая техника ИКТ-среза: веса как у цифровых собратьев выше
     "Y477110168": {  # персональные компьютеры
         "direction": "direct", "indicator_weight": 0.05,
