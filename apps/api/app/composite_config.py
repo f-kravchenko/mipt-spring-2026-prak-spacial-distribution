@@ -246,6 +246,16 @@ COMPOSITE = {
         "masks": {"road_network_mask": 0.40, "worldpop_mask": 0.25,
                   "road_traveltime_mask": 0.20, "territory_type_mask": 0.15},
     },
+    "C4771003024": {  # НР24 — патентоёмкость инновационной продукции
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"science_mask": 0.45, "worldpop_mask": 0.20,
+                  "distance_to_center_mask": 0.20, "territory_type_mask": 0.15},
+    },
+    "C4771005035": {  # ИНФ35 — коворкинги/фаблабы
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"worldpop_mask": 0.35, "distance_to_city_mask": 0.25,
+                  "road_network_mask": 0.20, "territory_type_mask": 0.20},
+    },
     # базовая техника ИКТ-среза: веса как у цифровых собратьев выше
     "Y477110168": {  # персональные компьютеры
         "direction": "direct", "indicator_weight": 0.05,

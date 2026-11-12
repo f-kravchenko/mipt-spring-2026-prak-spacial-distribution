@@ -727,6 +727,30 @@ csv_indicators:
     csv_path: "data/raw/sr33_regional_road_access_by_region.csv"
     formula: "Население (WorldPop) в 30 км от ближайшей вершины дороги primary|secondary / всё население региона * 100"
     source: "OpenStreetMap (Geofabrik по ФО): https://download.geofabrik.de; население — WorldPop 2020 1 км"
+  # НР24 — инновационные товары с использованием ИС. Форма 4-инновация закрыта,
+  # составной прокси из парка: выдано патентов на млрд руб. инновационных
+  # товаров (ИС-интенсивность). Осторожно: слагаемые — разные совокупности
+  # организаций. Собирает scripts/build_patent_intensity_csv.py.
+  C4771003024:  # НР24
+    name: "Патентоёмкость инновационной продукции"
+    unit: "патентов на млрд руб. инновационных товаров"
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/innovation_patent_intensity_by_region.csv"
+    formula: "Выдано патентов на изобретения (Y477110307) / Объём инновационных товаров (Y477110236) * 1000"
+    source: "Росстат (паркет): Y477110307 / Y477110236, 2023"
+  # ИНФ35 — КАВФ (коворкинги, акселераторы, фаблабы). Тег OSM размечен лишь в
+  # 15 регионах (акселераторы в OSM не размечают вовсе): реестр инфраструктуры
+  # поддержки МСП (мойбизнесрф.рф) закрыт для не-RU IP — при RU-прогоне
+  # заменить CSV на реестр. Пока — что есть, с этой оговоркой.
+  C4771005035:  # ИНФ35
+    name: "Обеспеченность коворкингами и фаблабами"
+    unit: "объектов на 100 тыс. чел"
+    indicator_type: general
+    rate_base: population
+    csv_path: "data/raw/kavf_per_100k_by_region.csv"
+    formula: "Число коворкингов/фаблабов (OSM amenity=coworking_space|hackerspace) / Численность населения * 100 000"
+    source: "OpenStreetMap: https://www.openstreetmap.org; население — паркет Y477110373"
 
 # Итоговая композиция (как у Полины) + конфигурации ablation (§9.5 ТЗ).
 final_weights:

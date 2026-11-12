@@ -42,6 +42,10 @@ FACETS = {
     "exhibition_halls": ['node["amenity"~"^(gallery|exhibition_centre)$"]',
                          'way["amenity"~"^(gallery|exhibition_centre)$"]'],
     "clubs": ['node["amenity"="community_centre"]', 'way["amenity"="community_centre"]'],
+    # ИНФ35 КАВФ: коворкинги и фаблабы/хакспейсы (акселераторы в OSM не размечены)
+    "kavf": ['node["amenity"~"^(coworking_space|hackerspace)$"]',
+             'way["amenity"~"^(coworking_space|hackerspace)$"]',
+             'node["leisure"="hackerspace"]', 'way["leisure"="hackerspace"]'],
 }
 BBOXES = ["(41,19,78,180)", "(41,-180,78,-169)"]  # по сторонам 180-го меридиана
 
