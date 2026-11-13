@@ -113,7 +113,15 @@ def main():
         for region, cnt in sorted(total.items(), key=lambda kv: -kv[1]):
             w.writerow([region, cnt])
         w.writerow(["Российская Федерация", sum(total.values())])
-    print(f"Записано: {OUT} ({len(total)} регионов)")
+    # отдельный счёт только ЦКП — для ИНФ31 (балл именно по ЦКПНО, без УНУ/ПИШ)
+    ckp_out = ROOT / "data" / "raw" / "ckp_objects_by_region.csv"
+    with ckp_out.open("w", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["region", "value"])
+        for region, cnt in sorted(ckp.items(), key=lambda kv: -kv[1]):
+            w.writerow([region, cnt])
+        w.writerow(["Российская Федерация", sum(ckp.values())])
+    print(f"Записано: {OUT} ({len(total)} регионов), {ckp_out.name} ({len(ckp)})")
 
 
 if __name__ == "__main__":
