@@ -256,6 +256,11 @@ COMPOSITE = {
         "masks": {"worldpop_mask": 0.35, "distance_to_city_mask": 0.25,
                   "road_network_mask": 0.20, "territory_type_mask": 0.20},
     },
+    "C4771001015": {  # ЧК15 — доля занятых в ВТ/наукоёмких ВЭД
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"science_mask": 0.30, "worldpop_mask": 0.30,
+                  "distance_to_city_mask": 0.20, "territory_type_mask": 0.20},
+    },
     # базовая техника ИКТ-среза: веса как у цифровых собратьев выше
     "Y477110168": {  # персональные компьютеры
         "direction": "direct", "indicator_weight": 0.05,
