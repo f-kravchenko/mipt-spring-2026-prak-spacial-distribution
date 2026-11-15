@@ -275,7 +275,7 @@ def main():
                                    "traveltime,science")
     ap.add_argument("--tile-deg", type=float, default=1.5)
     a = ap.parse_args()
-    want = set((a.only or "railway,power,territory,traveltime").split(","))
+    want = set((a.only or "railway,science,power,territory,traveltime").split(","))
 
     import geopandas as gpd
     from pyproj import Transformer
