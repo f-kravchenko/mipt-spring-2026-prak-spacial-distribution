@@ -30,7 +30,13 @@ from scripts.build_universities_csv import norm
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "data" / "raw" / "nti_objects_by_region.csv"
 
-BASE = "https://ckp-rf.ru/catalog/{cat}/?PAGEN_1={page}"
+BASE = "https://ckp-rf.ru/{path}/?PAGEN_1={page}"
+
+
+def fetch_url(cat: str, page: int) -> str:
+    # каталоги ЦКП/УНУ живут в /catalog/<cat>/, реестр ЦТТ — в /ntirf/objects/ctt
+    path = cat if "/" in cat else f"catalog/{cat}"
+    return BASE.format(path=path, page=page)
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
 SLEEP = 0.4  # щадящий интервал, как у build_culture_by_region.py
 
@@ -69,7 +75,7 @@ PISH_BY_REGION = {
 
 
 def fetch_page(cat: str, page: int) -> str:
-    r = requests.get(BASE.format(cat=cat, page=page), headers=HEADERS, timeout=30)
+    r = requests.get(fetch_url(cat, page), headers=HEADERS, timeout=30)
     r.raise_for_status()
     return r.text
 
@@ -99,6 +105,23 @@ def main():
     ckp = scrape_catalog("ckp")
     print("ckp-rf.ru: УНУ")
     usu = scrape_catalog("usu")
+    # ИНФ34 (ППИС): реестр ЦТТ на том же портале — /ntirf/objects/ctt.
+    # Пагинация та же (PAGEN_1); если структура карточек совпадает — сработает
+    # из коробки, иначе поправить регексы по факту (RU IP).
+    try:
+        print("ckp-rf.ru: ЦТТ")
+        ctt = scrape_catalog("ntirf/objects/ctt")
+    except Exception as e:
+        print(f"  ЦТТ пропущены: {e}")
+        ctt = Counter()
+    ctt_out = ROOT / "data" / "raw" / "ctt_objects_by_region.csv"
+    with ctt_out.open("w", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["region", "value"])
+        for region, cnt in sorted(ctt.items(), key=lambda kv: -kv[1]):
+            w.writerow([region, cnt])
+        w.writerow(["Российская Федерация", sum(ctt.values())])
+    print(f"ЦТТ: {sum(ctt.values())} в {len(ctt)} регионах → {ctt_out.name}")
 
     total = Counter()
     for c in (ckp, usu):

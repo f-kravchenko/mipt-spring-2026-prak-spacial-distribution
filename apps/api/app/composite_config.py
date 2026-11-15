@@ -261,6 +261,16 @@ COMPOSITE = {
         "masks": {"science_mask": 0.30, "worldpop_mask": 0.30,
                   "distance_to_city_mask": 0.20, "territory_type_mask": 0.20},
     },
+    "C4771005022": {  # ИНФ22 — коммерческие ЦОД
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"worldpop_mask": 0.35, "power_lines_mask": 0.25,
+                  "road_network_mask": 0.20, "distance_to_center_mask": 0.20},
+    },
+    "C4771005034": {  # ИНФ34 — центры трансфера технологий (балл 0-2)
+        "direction": "direct", "indicator_weight": 0.05,
+        "masks": {"science_mask": 0.45, "worldpop_mask": 0.20,
+                  "distance_to_center_mask": 0.20, "territory_type_mask": 0.15},
+    },
     # базовая техника ИКТ-среза: веса как у цифровых собратьев выше
     "Y477110168": {  # персональные компьютеры
         "direction": "direct", "indicator_weight": 0.05,
