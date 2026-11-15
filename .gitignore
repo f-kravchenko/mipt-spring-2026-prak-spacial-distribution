@@ -31,3 +31,4 @@ node_modules/
 apps/web/dist/
 .env
 .env.prod
+data/raw/fns_sshr_2025/
